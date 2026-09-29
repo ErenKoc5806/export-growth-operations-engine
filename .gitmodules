@@ -1,0 +1,6 @@
+[submodule "components/ai-worker"]
+	path = components/ai-worker
+	url = https://github.com/ErenKoc5806/AI-Worker.git
+[submodule "components/trade-intelligence"]
+	path = components/trade-intelligence
+	url = https://github.com/ErenKoc5806/trade_intelligence.git
