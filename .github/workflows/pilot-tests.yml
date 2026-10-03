@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m unittest discover -s tests -v
+      - run: python -W error::ResourceWarning -m unittest discover -s tests -v
       - run: python -m compileall -q pilot_engine tests
       - run: python -m pilot_engine > /dev/null
       - run: python tools/check_style.py

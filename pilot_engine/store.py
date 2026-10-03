@@ -18,6 +18,10 @@ from pilot_engine.workflow import PilotResult, run_case, validate_quotation_revi
 
 
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
+MIGRATION_FILES = (
+    "001_initial.sql", "002_validation.sql", "003_access.sql",
+    "004_immutable_approval.sql",
+)
 
 
 def _utc_now() -> str:
@@ -53,10 +57,10 @@ class PilotStore:
             raise PermissionError("Database must be owner-only and owned by the process UID")
         with closing(self._connect()) as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version < 0 or version > len(MIGRATION_FILES):
                 raise ValueError(f"Unsupported database schema version: {version}")
-            for next_version in range(version + 1, 4):
-                migration = MIGRATIONS / f"{next_version:03d}_{ {1: 'initial', 2: 'validation', 3: 'access'}[next_version] }.sql"
+            for migration_name in MIGRATION_FILES[version:]:
+                migration = MIGRATIONS / migration_name
                 try:
                     db.executescript(migration.read_text(encoding="utf-8"))
                 except Exception:
@@ -308,6 +312,8 @@ class PilotStore:
                     raise ValueError("Approval target does not match reviewed record")
                 now = _utc_now()
                 approval_id = f"{action}:{target_id}:{revision}"
+                if db.execute("SELECT 1 FROM approval WHERE id = ?", (approval_id,)).fetchone():
+                    raise ValueError("This target revision already has an approval")
                 db.execute("INSERT INTO approval VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (approval_id, opportunity_id, action, target_id, revision,
                             None, actor_id, "APPROVED", now))

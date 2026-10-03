@@ -3,7 +3,7 @@
 Use Python 3.12 or newer. From the main repository, run:
 
 ```bash
-python -m unittest discover -s tests -v
+python -W error::ResourceWarning -m unittest discover -s tests -v
 python -m compileall -q pilot_engine tests
 python tools/check_style.py
 python -m pilot_engine
