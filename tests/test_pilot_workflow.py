@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from pilot_engine.workflow import PilotValidationError, run_case
-from pilot_engine.domain import OpportunityStatus, require_transition
+from pilot_engine.domain import OpportunityStatus, PilotScope, require_transition
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "pilot_engine" / "fixtures" / "732690_de_synthetic.json"
@@ -32,7 +32,7 @@ class PilotWorkflowTests(unittest.TestCase):
 
         unapproved = case()
         unapproved["quotation"]["status"] = "DRAFT"
-        with self.assertRaisesRegex(PilotValidationError, "human approver"):
+        with self.assertRaisesRegex(PilotValidationError, "Draft quotation"):
             run_case(unapproved)
 
     def test_po_mismatch_and_invalid_totals_block_order_creation(self):
@@ -60,6 +60,15 @@ class PilotWorkflowTests(unittest.TestCase):
         require_transition(OpportunityStatus.DISCOVERED, OpportunityStatus.CONTACT_REVIEW)
         with self.assertRaisesRegex(ValueError, "Illegal opportunity transition"):
             require_transition(OpportunityStatus.DISCOVERED, OpportunityStatus.ORDER_DRAFT)
+
+    def test_scope_is_explicit_and_not_embedded_in_validation(self):
+        alternate = case()
+        alternate["product"]["hs6"] = "123456"
+        alternate["target_country"] = "FR"
+        alternate["quotation"]["currency"] = "USD"
+        alternate["customer_po"]["currency"] = "USD"
+        result = run_case(alternate, PilotScope("123456", "FR", "USD"))
+        self.assertEqual(result.sales_order["currency"], "USD")
 
 
 if __name__ == "__main__":
