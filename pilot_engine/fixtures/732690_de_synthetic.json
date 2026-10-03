@@ -4,9 +4,11 @@
   "target_country": "DE",
   "product": {
     "hs6": "732690",
-    "sku": "SYN-STEEL-PART-001",
-    "description": "Hypothetical fabricated steel part; tariff classification and specifications unverified",
-    "unit": "PCS"
+    "sku": "SYN-CONNECTION-CLAMP-001",
+    "description": "Synthetic connection clamp (bağlantı kelepçesi); technical specifications and tariff classification unverified",
+    "unit": "PCS",
+    "search_terms": ["connection clamp", "clamp", "exhaust clamp", "pipe clamp"],
+    "search_terms_note": "Exhaust and pipe applications are candidate search terms, not confirmed product uses"
   },
   "buyer": {
     "company": "Example German Distributor GmbH",
@@ -22,7 +24,7 @@
   "quotation": {
     "id": "Q-SYN-001",
     "rfq_id": "RFQ-SYN-001",
-    "sku": "SYN-STEEL-PART-001",
+    "sku": "SYN-CONNECTION-CLAMP-001",
     "quantity": "100",
     "unit": "PCS",
     "currency": "EUR",
@@ -33,7 +35,7 @@
   "customer_po": {
     "id": "PO-SYN-001",
     "quotation_id": "Q-SYN-001",
-    "sku": "SYN-STEEL-PART-001",
+    "sku": "SYN-CONNECTION-CLAMP-001",
     "quantity": "100",
     "unit": "PCS",
     "currency": "EUR",
