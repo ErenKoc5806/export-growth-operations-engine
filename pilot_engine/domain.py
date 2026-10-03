@@ -4,13 +4,25 @@ This module defines a contract only. It does not persist state or authorize
 external actions; those responsibilities belong to the application layer.
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
 SCHEMA_VERSION = "0.1.0"
 
 
+@dataclass(frozen=True)
+class PilotScope:
+    hs6: str
+    country: str
+    currency: str
+
+
+DEFAULT_PILOT_SCOPE = PilotScope("732690", "DE", "EUR")
+
+
 class OpportunityStatus(StrEnum):
+    SYNTHETIC_DRAFT = "SYNTHETIC_DRAFT"
     DISCOVERED = "DISCOVERED"
     CONTACT_REVIEW = "CONTACT_REVIEW"
     CONTACT_READY = "CONTACT_READY"
@@ -25,6 +37,7 @@ class OpportunityStatus(StrEnum):
 
 
 ALLOWED_TRANSITIONS: dict[OpportunityStatus, frozenset[OpportunityStatus]] = {
+    OpportunityStatus.SYNTHETIC_DRAFT: frozenset(),
     OpportunityStatus.DISCOVERED: frozenset({OpportunityStatus.CONTACT_REVIEW}),
     OpportunityStatus.CONTACT_REVIEW: frozenset({OpportunityStatus.CONTACT_READY, OpportunityStatus.CLOSED}),
     OpportunityStatus.CONTACT_READY: frozenset({OpportunityStatus.OUTREACH_REVIEW, OpportunityStatus.CLOSED}),
