@@ -156,6 +156,23 @@ class PilotStoreTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
 
+    def test_v1_upgrade_rejects_existing_invalid_quote(self):
+        migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
+        with sqlite3.connect(self.path) as db:
+            db.execute("PRAGMA foreign_keys = ON")
+            db.executescript(migration.read_text(encoding="utf-8"))
+            db.execute("INSERT INTO manufacturer VALUES ('M', 'Synthetic', '2026-10-03T00:00:00Z')")
+            db.execute("INSERT INTO product VALUES ('P', 'M', 'SKU', 'Clamp', 'PCS', '732690', NULL, 'UNVERIFIED', '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')")
+            db.execute("INSERT INTO market_target VALUES ('T', 'P', 'DE', '[]', '2026-10-03T00:00:00Z')")
+            db.execute("INSERT INTO buyer_company VALUES ('B', 'Buyer', 'DE', 'BUYER', '2026-10-03T00:00:00Z')")
+            db.execute("INSERT INTO opportunity VALUES ('O', 'P', 'T', 'B', 'Operator', 'DISCOVERED', 1, 'synthetic', 'O', '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')")
+            db.execute("INSERT INTO rfq VALUES ('R', 'O', 'R', '2026-10-03T00:00:00Z', '{}')")
+            db.execute("INSERT INTO quotation_revision VALUES ('Q', 1, 'R', 'SKU', '2', 'PCS', 'EUR', '-1', '{}', 'APPROVED', 'Operator', '2026-10-03T00:00:00Z')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            PilotStore(self.path)
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
