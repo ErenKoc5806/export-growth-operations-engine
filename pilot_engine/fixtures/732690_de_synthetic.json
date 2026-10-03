@@ -1,0 +1,50 @@
+{
+  "synthetic": true,
+  "opportunity_id": "PILOT-732690-DE-001",
+  "target_country": "DE",
+  "product": {
+    "hs6": "732690",
+    "sku": "SYN-STEEL-PART-001",
+    "description": "Hypothetical fabricated steel part; tariff classification and specifications unverified",
+    "unit": "PCS"
+  },
+  "buyer": {
+    "company": "Example German Distributor GmbH",
+    "business_email": "purchasing@example.com",
+    "source_url": "https://example.com/synthetic-contact",
+    "checked_at": "2026-10-03",
+    "verified": true
+  },
+  "rfq": {
+    "id": "RFQ-SYN-001",
+    "opportunity_id": "PILOT-732690-DE-001"
+  },
+  "quotation": {
+    "id": "Q-SYN-001",
+    "rfq_id": "RFQ-SYN-001",
+    "sku": "SYN-STEEL-PART-001",
+    "quantity": "100",
+    "unit": "PCS",
+    "currency": "EUR",
+    "unit_price": "12.50",
+    "status": "APPROVED",
+    "approved_by": "Synthetic Operator"
+  },
+  "customer_po": {
+    "id": "PO-SYN-001",
+    "quotation_id": "Q-SYN-001",
+    "sku": "SYN-STEEL-PART-001",
+    "quantity": "100",
+    "unit": "PCS",
+    "currency": "EUR",
+    "unit_price": "12.50",
+    "total": "1250.00",
+    "accepted_by": "Synthetic Operator"
+  },
+  "shipment": {
+    "boxes": "2",
+    "net_weight_kg": "40",
+    "gross_weight_kg": "44",
+    "destination": "Germany"
+  }
+}
