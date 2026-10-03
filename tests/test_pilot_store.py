@@ -65,17 +65,76 @@ class PilotStoreTests(unittest.TestCase):
         oid = self.case["opportunity_id"]
         with self.assertRaisesRegex(ValueError, "Illegal"):
             store.transition(oid, OpportunityStatus.ORDER_DRAFT, "Operator")
-        store.transition(oid, OpportunityStatus.CONTACT_REVIEW, "Operator")
         summary = PilotStore(self.path).read_summary(oid)
-        self.assertEqual((summary["status"], summary["revision"]), ("CONTACT_REVIEW", 2))
+        self.assertEqual((summary["status"], summary["revision"]), ("SYNTHETIC_DRAFT", 1))
         self.assertNotIn("business_email", summary)
         with sqlite3.connect(self.path) as db:
             audit = db.execute("SELECT action, before_state, after_state FROM audit_event ORDER BY id").fetchall()
-            self.assertEqual(len(audit), 2)
-            self.assertEqual(audit[-1], ("STATUS_CHANGED", "DISCOVERED", "CONTACT_REVIEW"))
+            self.assertEqual(len(audit), 1)
+            self.assertEqual(audit[-1], ("SYNTHETIC_CASE_INGESTED", None, "SYNTHETIC_DRAFT"))
             self.assertEqual(db.execute("SELECT business_email FROM contact_evidence").fetchone()[0], "purchasing@example.com")
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute("DELETE FROM audit_event")
+
+    def test_sensitive_transitions_require_matching_approval_in_same_transaction(self):
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        oid = self.case["opportunity_id"]
+        # Construct a review state without pretending the synthetic import was a live sale.
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE opportunity SET status = 'QUOTE_REVIEW' WHERE id = ?", (oid,))
+        with self.assertRaisesRegex(ValueError, "[Qq]uotation revision approval"):
+            store.transition(oid, OpportunityStatus.QUOTE_APPROVED, "Synthetic Operator")
+        self.assertEqual(store.read_summary(oid)["status"], "QUOTE_REVIEW")
+        with self.assertRaisesRegex(ValueError, "do not match"):
+            store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "Wrong actor")
+        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "Synthetic Operator")
+        with self.assertRaisesRegex(ValueError, "quotation revision approval"):
+            store.transition(oid, OpportunityStatus.QUOTE_APPROVED, "Synthetic Operator",
+                             approval_target_id="Q-SYN-001", approval_revision=99)
+        store.transition(oid, OpportunityStatus.QUOTE_APPROVED, "Synthetic Operator",
+                         approval_target_id="Q-SYN-001", approval_revision=1)
+        store.transition(oid, OpportunityStatus.PO_REVIEW, "Synthetic Operator")
+        with self.assertRaisesRegex(ValueError, "customer PO approval"):
+            store.transition(oid, OpportunityStatus.ORDER_DRAFT, "Synthetic Operator",
+                             approval_target_id="PO-SYN-001", approval_revision=1)
+        store.record_approval(oid, "APPROVE_PO", "PO-SYN-001", 1, "Synthetic Operator")
+        store.transition(oid, OpportunityStatus.ORDER_DRAFT, "Synthetic Operator",
+                         approval_target_id="PO-SYN-001", approval_revision=1)
+        self.assertEqual(store.read_summary(oid)["status"], "ORDER_DRAFT")
+
+    def test_bad_revision_and_direct_sql_are_rejected(self):
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        for field, bad in (("unit_price", "-1"), ("quantity", "nonsense"),
+                           ("currency", "USD"), ("sku", "WRONG"),
+                           ("unit_price", 1.5), ("approved_by", "  ")):
+            with self.subTest(field=field, bad=bad):
+                quote = copy.deepcopy(self.case["quotation"])
+                quote["revision"] = 2
+                quote[field] = bad
+                with self.assertRaises(ValueError):
+                    store.append_quotation_revision(quote)
+        with sqlite3.connect(self.path) as db:
+            with self.assertRaises(sqlite3.DatabaseError):
+                db.execute("""INSERT INTO quotation_revision VALUES
+                    ('Q-BAD', 1, 'RFQ-SYN-001', 'SKU', 'not a number', 'PCS',
+                     'EUR', '12.50', '{}', 'DRAFT', NULL, '2026-10-03T00:00:00Z')""")
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE opportunity SET status = 'GIBBERISH'")
+        self.assertEqual(store.read_summary(self.case["opportunity_id"])["quotation_revisions"], 1)
+
+    def test_outreach_requires_approval_for_exact_content(self):
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        oid = self.case["opportunity_id"]
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE opportunity SET status = 'OUTREACH_REVIEW' WHERE id = ?", (oid,))
+            db.execute("INSERT INTO outreach VALUES (?, ?, ?, ?, ?, ?, ?)",
+                       ("OUT-1", oid, f"C-{oid}", "hash-a", None, "REVIEW", "2026-10-03T00:00:00Z"))
+        with self.assertRaisesRegex(ValueError, "outreach content approval"):
+            store.transition(oid, OpportunityStatus.RFQ_RECEIVED, "Synthetic Operator")
+        self.assertEqual(store.read_summary(oid)["status"], "OUTREACH_REVIEW")
 
     def test_backup_can_be_restored_as_a_new_database(self):
         store = PilotStore(self.path)
@@ -86,6 +145,16 @@ class PilotStoreTests(unittest.TestCase):
         self.assertEqual(restored.read_summary(self.case["opportunity_id"])["order_total"], "1250.00")
         with self.assertRaisesRegex(ValueError, "destination must differ"):
             store.backup_to(self.path)
+
+    def test_v1_schema_is_upgraded_to_v2(self):
+        migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
+        with sqlite3.connect(self.path) as db:
+            db.executescript(migration.read_text(encoding="utf-8"))
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
 
 
 if __name__ == "__main__":
