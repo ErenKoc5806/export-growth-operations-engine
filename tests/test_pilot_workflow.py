@@ -15,6 +15,7 @@ def case():
 class PilotWorkflowTests(unittest.TestCase):
     def test_approved_case_links_find_sell_execute_and_reconciles_documents(self):
         result = run_case(case())
+        self.assertEqual(result.sales_order["sku"], "SYN-CONNECTION-CLAMP-001")
         self.assertEqual([e["stage"] for e in result.audit_events], ["FIND", "SELL", "EXECUTE"])
         self.assertEqual(result.sales_order["customer_po_id"], "PO-SYN-001")
         self.assertEqual(result.sales_order["total"], result.commercial_invoice_draft["total"])
