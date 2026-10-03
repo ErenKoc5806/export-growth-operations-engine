@@ -26,7 +26,7 @@ For an existing clone, run `git submodule update --init --recursive`. The main p
 Use Python 3.12 or newer. No third-party Python package is required for the main product's current tests.
 
 ```bash
-python -m unittest discover -s tests -v
+python -W error::ResourceWarning -m unittest discover -s tests -v
 python -m compileall -q pilot_engine tests
 python tools/check_style.py
 python -m pilot_engine
