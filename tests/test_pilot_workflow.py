@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from pilot_engine.workflow import PilotValidationError, run_case
+from pilot_engine.domain import OpportunityStatus, require_transition
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "pilot_engine" / "fixtures" / "732690_de_synthetic.json"
@@ -18,6 +19,7 @@ class PilotWorkflowTests(unittest.TestCase):
         self.assertEqual(result.sales_order["sku"], "SYN-CONNECTION-CLAMP-001")
         self.assertEqual([e["stage"] for e in result.audit_events], ["FIND", "SELL", "EXECUTE"])
         self.assertEqual(result.sales_order["customer_po_id"], "PO-SYN-001")
+        self.assertEqual(result.sales_order["quotation_revision"], 1)
         self.assertEqual(result.sales_order["total"], result.commercial_invoice_draft["total"])
         self.assertEqual(result.sales_order["id"], result.packing_list_draft["order_id"])
         self.assertEqual(result.commercial_invoice_draft["status"], "DRAFT_REQUIRES_REVIEW")
@@ -48,6 +50,16 @@ class PilotWorkflowTests(unittest.TestCase):
         bad_currency["quotation"]["currency"] = "USD"
         with self.assertRaisesRegex(PilotValidationError, "currency does not match"):
             run_case(bad_currency)
+
+    def test_stale_quotation_revision_and_illegal_stage_skip_are_rejected(self):
+        stale = case()
+        stale["quotation"]["revision"] = 2
+        with self.assertRaisesRegex(PilotValidationError, "different quotation revision"):
+            run_case(stale)
+
+        require_transition(OpportunityStatus.DISCOVERED, OpportunityStatus.CONTACT_REVIEW)
+        with self.assertRaisesRegex(ValueError, "Illegal opportunity transition"):
+            require_transition(OpportunityStatus.DISCOVERED, OpportunityStatus.ORDER_DRAFT)
 
 
 if __name__ == "__main__":
