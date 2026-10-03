@@ -1,6 +1,6 @@
 # FND-011 — Pilot acceptance strategy
 
-The first deterministic technical slice uses the user-selected HS6 research filter `732690` and Germany (`DE`). The product, distributor, operator and amounts in the fixture are **entirely synthetic**. The invented product has no confirmed tariff classification and the example contact is not a real buyer.
+The first deterministic technical slice uses the user-selected HS6 research filter `732690`, Germany (`DE`) and the user-named product **bağlantı kelepçesi (connection clamp)**. The SKU, specifications, distributor, operator and amounts in the fixture are **entirely synthetic**. Its tariff classification and actual application are unverified. `exhaust clamp` and `pipe clamp` are candidate search phrases; they require product-fit checks before a buyer is accepted. The example contact is not a real buyer.
 
 Run locally from the parent repository:
 
