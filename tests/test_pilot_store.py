@@ -1,10 +1,12 @@
 import copy
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
+from pilot_engine.access import LocalAccess, Role
 from pilot_engine.domain import OpportunityStatus
 from pilot_engine.store import PilotStore
 from pilot_engine.workflow import PilotValidationError
@@ -64,7 +66,7 @@ class PilotStoreTests(unittest.TestCase):
         store.save_synthetic_case(self.case)
         oid = self.case["opportunity_id"]
         with self.assertRaisesRegex(ValueError, "Illegal"):
-            store.transition(oid, OpportunityStatus.ORDER_DRAFT, "Operator")
+            store.transition(oid, OpportunityStatus.ORDER_DRAFT)
         summary = PilotStore(self.path).read_summary(oid)
         self.assertEqual((summary["status"], summary["revision"]), ("SYNTHETIC_DRAFT", 1))
         self.assertNotIn("business_email", summary)
@@ -84,22 +86,22 @@ class PilotStoreTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE opportunity SET status = 'QUOTE_REVIEW' WHERE id = ?", (oid,))
         with self.assertRaisesRegex(ValueError, "[Qq]uotation revision approval"):
-            store.transition(oid, OpportunityStatus.QUOTE_APPROVED, "Synthetic Operator")
+            store.transition(oid, OpportunityStatus.QUOTE_APPROVED)
         self.assertEqual(store.read_summary(oid)["status"], "QUOTE_REVIEW")
-        with self.assertRaisesRegex(ValueError, "do not match"):
-            store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "Wrong actor")
-        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "Synthetic Operator")
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 99)
+        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
         with self.assertRaisesRegex(ValueError, "quotation revision approval"):
-            store.transition(oid, OpportunityStatus.QUOTE_APPROVED, "Synthetic Operator",
+            store.transition(oid, OpportunityStatus.QUOTE_APPROVED,
                              approval_target_id="Q-SYN-001", approval_revision=99)
-        store.transition(oid, OpportunityStatus.QUOTE_APPROVED, "Synthetic Operator",
+        store.transition(oid, OpportunityStatus.QUOTE_APPROVED,
                          approval_target_id="Q-SYN-001", approval_revision=1)
-        store.transition(oid, OpportunityStatus.PO_REVIEW, "Synthetic Operator")
+        store.transition(oid, OpportunityStatus.PO_REVIEW)
         with self.assertRaisesRegex(ValueError, "customer PO approval"):
-            store.transition(oid, OpportunityStatus.ORDER_DRAFT, "Synthetic Operator",
+            store.transition(oid, OpportunityStatus.ORDER_DRAFT,
                              approval_target_id="PO-SYN-001", approval_revision=1)
-        store.record_approval(oid, "APPROVE_PO", "PO-SYN-001", 1, "Synthetic Operator")
-        store.transition(oid, OpportunityStatus.ORDER_DRAFT, "Synthetic Operator",
+        store.record_approval(oid, "APPROVE_PO", "PO-SYN-001", 1)
+        store.transition(oid, OpportunityStatus.ORDER_DRAFT,
                          approval_target_id="PO-SYN-001", approval_revision=1)
         self.assertEqual(store.read_summary(oid)["status"], "ORDER_DRAFT")
 
@@ -133,7 +135,7 @@ class PilotStoreTests(unittest.TestCase):
             db.execute("INSERT INTO outreach VALUES (?, ?, ?, ?, ?, ?, ?)",
                        ("OUT-1", oid, f"C-{oid}", "hash-a", None, "REVIEW", "2026-10-03T00:00:00Z"))
         with self.assertRaisesRegex(ValueError, "outreach content approval"):
-            store.transition(oid, OpportunityStatus.RFQ_RECEIVED, "Synthetic Operator")
+            store.transition(oid, OpportunityStatus.RFQ_RECEIVED)
         self.assertEqual(store.read_summary(oid)["status"], "OUTREACH_REVIEW")
 
     def test_backup_can_be_restored_as_a_new_database(self):
@@ -146,15 +148,16 @@ class PilotStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "destination must differ"):
             store.backup_to(self.path)
 
-    def test_v1_schema_is_upgraded_to_v2(self):
+    def test_v1_schema_is_upgraded_to_v3(self):
         migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
         with sqlite3.connect(self.path) as db:
             db.executescript(migration.read_text(encoding="utf-8"))
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+        self.path.chmod(0o600)
         store = PilotStore(self.path)
         store.save_synthetic_case(self.case)
         with sqlite3.connect(self.path) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_v1_upgrade_rejects_existing_invalid_quote(self):
         migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
@@ -168,10 +171,53 @@ class PilotStoreTests(unittest.TestCase):
             db.execute("INSERT INTO opportunity VALUES ('O', 'P', 'T', 'B', 'Operator', 'DISCOVERED', 1, 'synthetic', 'O', '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')")
             db.execute("INSERT INTO rfq VALUES ('R', 'O', 'R', '2026-10-03T00:00:00Z', '{}')")
             db.execute("INSERT INTO quotation_revision VALUES ('Q', 1, 'R', 'SKU', '2', 'PCS', 'EUR', '-1', '{}', 'APPROVED', 'Operator', '2026-10-03T00:00:00Z')")
+        self.path.chmod(0o600)
         with self.assertRaises(sqlite3.IntegrityError):
             PilotStore(self.path)
         with sqlite3.connect(self.path) as db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+
+    def test_os_role_controls_contact_approval_and_records_denials(self):
+        admin = PilotStore(self.path)
+        admin.save_synthetic_case(self.case)
+        uid = os.geteuid()
+        viewer = PilotStore(self.path, access=LocalAccess({uid: Role.VIEWER}))
+        oid = self.case["opportunity_id"]
+        self.assertIsNotNone(viewer.read_summary(oid))
+        with self.assertRaises(PermissionError):
+            viewer.read_contact(f"C-{oid}")
+        with self.assertRaises(PermissionError):
+            viewer.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
+        with self.assertRaises(PermissionError):
+            viewer.transition(oid, OpportunityStatus.DOCUMENT_REVIEW)
+        with self.assertRaises(TypeError):
+            admin.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "Forged actor")
+        contact = admin.read_contact(f"C-{oid}")
+        self.assertEqual(contact["business_email"], "purchasing@example.com")
+        with sqlite3.connect(self.path) as db:
+            rows = db.execute("SELECT permission, allowed, actor_id FROM access_decision WHERE allowed = 0").fetchall()
+            self.assertEqual({row[0] for row in rows}, {"READ_CONTACT", "APPROVE_QUOTE", "TRANSITION"})
+            self.assertEqual({row[2] for row in rows}, {f"uid:{uid}"})
+            self.assertNotIn("purchasing@example.com", str(rows))
+
+    def test_fixture_operator_cannot_forge_authenticated_owner_or_audit_actor(self):
+        forged = copy.deepcopy(self.case)
+        forged["operator_id"] = "Forged Administrator"
+        PilotStore(self.path).save_synthetic_case(forged)
+        with sqlite3.connect(self.path) as db:
+            owner = db.execute("SELECT owner_id FROM opportunity").fetchone()[0]
+            actor = db.execute("SELECT actor_id FROM audit_event").fetchone()[0]
+        self.assertEqual((owner, actor), (f"uid:{os.geteuid()}", f"uid:{os.geteuid()}"))
+
+    def test_database_and_backup_are_owner_only(self):
+        store = PilotStore(self.path)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        backup = Path(self.temp.name) / "private-backup.sqlite3"
+        store.backup_to(backup)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+        self.path.chmod(0o644)
+        with self.assertRaises(PermissionError):
+            PilotStore(self.path)
 
 
 if __name__ == "__main__":

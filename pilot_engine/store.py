@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from pilot_engine.access import LocalAccess, current_uid
 from pilot_engine.domain import DEFAULT_PILOT_SCOPE, OpportunityStatus, PilotScope, require_transition
 from pilot_engine.workflow import PilotResult, run_case, validate_quotation_revision
 
@@ -26,18 +29,34 @@ def _json(value: Any) -> str:
 
 
 class PilotStore:
-    def __init__(self, path: str | Path, scope: PilotScope = DEFAULT_PILOT_SCOPE):
+    def __init__(
+        self, path: str | Path, scope: PilotScope = DEFAULT_PILOT_SCOPE,
+        access: LocalAccess | None = None,
+    ):
         self.path = Path(path)
         self.scope = scope
+        self.access = access if access is not None else LocalAccess.single_operator()
         if str(self.path) == ":memory:":
             raise ValueError("Use a file path for durable pilot storage")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if self.path.is_symlink():
+            raise PermissionError("Database path must not be a symlink")
+        if not self.path.exists():
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                os.close(fd)
+            except FileExistsError:
+                pass
+        metadata = self.path.stat()
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != current_uid()
+                or metadata.st_mode & 0o077):
+            raise PermissionError("Database must be owner-only and owned by the process UID")
         with closing(self._connect()) as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise ValueError(f"Unsupported database schema version: {version}")
-            for next_version in range(version + 1, 3):
-                migration = MIGRATIONS / f"{next_version:03d}_{'initial' if next_version == 1 else 'validation'}.sql"
+            for next_version in range(version + 1, 4):
+                migration = MIGRATIONS / f"{next_version:03d}_{ {1: 'initial', 2: 'validation', 3: 'access'}[next_version] }.sql"
                 try:
                     db.executescript(migration.read_text(encoding="utf-8"))
                 except Exception:
@@ -64,12 +83,26 @@ class PilotStore:
         finally:
             db.close()
 
+    def _log_access(self, db: sqlite3.Connection, permission: str, target_id: str) -> str | None:
+        actor_id, allowed = self.access.decision(permission)
+        db.execute("INSERT INTO access_decision (actor_id, permission, target_id, allowed, occurred_at_utc) VALUES (?, ?, ?, ?, ?)",
+                   (actor_id, permission, target_id, int(allowed), _utc_now()))
+        return actor_id if allowed else None
+
+    def _require_access(self, permission: str, target_id: str) -> str:
+        with self._transaction() as db:
+            actor_id = self._log_access(db, permission, target_id)
+        if actor_id is None:
+            raise PermissionError(f"{permission} denied for local OS account")
+        return actor_id
+
     def save_synthetic_case(self, case: dict[str, Any]) -> PilotResult:
         """Persist a fully validated fixture as drafts; repeated identical input is a no-op.
 
         This test adapter does not grant approval to send or issue documents.
         Live import requires independent evidence and identity validation.
         """
+        actor_id = self._require_access("SAVE_CASE", str(case.get("opportunity_id", "unknown")))
         result = run_case(case, self.scope)
         digest = hashlib.sha256(_json(case).encode("utf-8")).hexdigest()
         checked_at = datetime.fromisoformat(case["buyer"]["checked_at"])
@@ -79,7 +112,6 @@ class PilotStore:
         oid = result.opportunity_id
         product, buyer = case["product"], case["buyer"]
         manufacturer_name = case["manufacturer_name"]
-        operator_id = case["operator_id"]
         quote, po = case["quotation"], case["customer_po"]
         with self._transaction() as db:
             previous = db.execute(
@@ -110,7 +142,7 @@ class PilotStore:
                         buyer["source_system"], buyer["source_ref"], buyer["source_url"],
                         buyer["checked_at"], 1, now))
             db.execute("INSERT INTO opportunity VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                       (oid, product_id, target_id, buyer_id, operator_id.strip(),
+                       (oid, product_id, target_id, buyer_id, actor_id,
                         OpportunityStatus.SYNTHETIC_DRAFT.value, 1, "synthetic", oid, now, now))
             db.execute("INSERT INTO rfq VALUES (?, ?, ?, ?, ?)",
                        (case["rfq"]["id"], oid, case["rfq"]["id"], now,
@@ -139,7 +171,7 @@ class PilotStore:
             db.execute("INSERT INTO case_ingest VALUES (?, ?, ?, ?)",
                        (oid, digest, order["id"], now))
             db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, source_ref, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                       (oid, "SYNTHETIC_CASE_INGESTED", operator_id.strip(), oid,
+                       (oid, "SYNTHETIC_CASE_INGESTED", actor_id, oid,
                         None, OpportunityStatus.SYNTHETIC_DRAFT.value, buyer["source_ref"], now))
         return result
 
@@ -153,6 +185,7 @@ class PilotStore:
 
     def append_quotation_revision(self, quote: dict[str, Any]) -> None:
         """Add a later revision; old revisions and their PO references stay immutable."""
+        actor_id = self._require_access("EDIT_QUOTE", str(quote.get("id", "unknown")))
         now = _utc_now()
         with self._transaction() as db:
             prior = db.execute(
@@ -174,30 +207,32 @@ class PilotStore:
             if oid is None:
                 raise ValueError("RFQ does not exist")
             db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, source_ref, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                       (oid[0], "QUOTATION_REVISION_ADDED", quote.get("approved_by") or "system",
+                       (oid[0], "QUOTATION_REVISION_ADDED", actor_id,
                         quote["id"], str(prior["revision"]), str(quote["revision"]), quote["rfq_id"], now))
 
     def transition(
-        self, opportunity_id: str, target: OpportunityStatus, actor_id: str,
+        self, opportunity_id: str, target: OpportunityStatus,
         *, approval_target_id: str | None = None, approval_revision: int | None = None,
     ) -> None:
-        if not actor_id.strip():
-            raise ValueError("Transition requires an actor")
         with self._transaction() as db:
-            row = db.execute("SELECT status FROM opportunity WHERE id = ?", (opportunity_id,)).fetchone()
-            if row is None:
-                raise ValueError("Opportunity does not exist")
-            current = OpportunityStatus(row["status"])
-            require_transition(current, target)
-            self._require_approval(
-                db, opportunity_id, target, approval_target_id, approval_revision
-            )
-            now = _utc_now()
-            db.execute("UPDATE opportunity SET status = ?, revision = revision + 1, updated_at_utc = ? WHERE id = ?",
-                       (target.value, now, opportunity_id))
-            db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (opportunity_id, "STATUS_CHANGED", actor_id, opportunity_id,
-                        current.value, target.value, now))
+            actor_id = self._log_access(db, "TRANSITION", opportunity_id)
+            if actor_id is not None:
+                row = db.execute("SELECT status FROM opportunity WHERE id = ?", (opportunity_id,)).fetchone()
+                if row is None:
+                    raise ValueError("Opportunity does not exist")
+                current = OpportunityStatus(row["status"])
+                require_transition(current, target)
+                self._require_approval(
+                    db, opportunity_id, target, approval_target_id, approval_revision
+                )
+                now = _utc_now()
+                db.execute("UPDATE opportunity SET status = ?, revision = revision + 1, updated_at_utc = ? WHERE id = ?",
+                           (target.value, now, opportunity_id))
+                db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (opportunity_id, "STATUS_CHANGED", actor_id, opportunity_id,
+                            current.value, target.value, now))
+        if actor_id is None:
+            raise PermissionError("TRANSITION denied for local OS account")
 
     @staticmethod
     def _require_approval(
@@ -229,7 +264,7 @@ class PilotStore:
                 WHERE r.opportunity_id = ? AND a.opportunity_id = ?
                   AND a.target_id = ? AND a.target_revision = ?
                   AND a.action = 'APPROVE_QUOTE' AND a.decision = 'APPROVED'
-                  AND q.status = 'APPROVED' AND q.approved_by = a.actor_id
+                  AND q.status = 'APPROVED' AND trim(q.approved_by) != ''
                   AND q.revision = (SELECT MAX(q2.revision) FROM quotation_revision q2
                                     WHERE q2.quotation_id = q.quotation_id)
                 LIMIT 1""", (oid, oid, target_id, revision)).fetchone()
@@ -242,7 +277,7 @@ class PilotStore:
                 JOIN customer_po p ON p.id = a.target_id AND p.opportunity_id = a.opportunity_id
                 WHERE a.opportunity_id = ? AND a.target_id = ? AND a.target_revision = ?
                   AND a.action = 'APPROVE_PO'
-                  AND a.decision = 'APPROVED' AND a.actor_id = p.accepted_by
+                  AND a.decision = 'APPROVED' AND trim(p.accepted_by) != ''
                   AND a.target_revision = p.quotation_revision
                 LIMIT 1""", (oid, target_id, revision)).fetchone()
             if evidence is None:
@@ -250,35 +285,40 @@ class PilotStore:
 
     def record_approval(
         self, opportunity_id: str, action: str, target_id: str,
-        revision: int, actor_id: str,
+        revision: int,
     ) -> None:
-        """Record explicit synthetic approval evidence; caller authentication is FND-006."""
-        if action not in ("APPROVE_QUOTE", "APPROVE_PO") or not actor_id.strip():
-            raise ValueError("Approval action and named actor are required")
-        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
-            raise ValueError("Approval requires a positive target revision")
+        """Bind approval to an OS authenticated local account and reviewed target."""
         with self._transaction() as db:
-            if action == "APPROVE_QUOTE":
-                match = db.execute("""SELECT 1 FROM quotation_revision q JOIN rfq r ON r.id = q.rfq_id
-                    WHERE r.opportunity_id = ? AND q.quotation_id = ? AND q.revision = ?
-                    AND q.status = 'APPROVED' AND q.approved_by = ?""",
-                    (opportunity_id, target_id, revision, actor_id)).fetchone()
-            else:
-                match = db.execute("""SELECT 1 FROM customer_po WHERE opportunity_id = ? AND id = ?
-                    AND quotation_revision = ? AND accepted_by = ?""",
-                    (opportunity_id, target_id, revision, actor_id)).fetchone()
-            if match is None:
-                raise ValueError("Approval target and actor do not match reviewed record")
-            now = _utc_now()
-            approval_id = f"{action}:{target_id}:{revision}"
-            db.execute("INSERT INTO approval VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                       (approval_id, opportunity_id, action, target_id, revision,
-                        None, actor_id.strip(), "APPROVED", now))
-            db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (opportunity_id, action, actor_id.strip(), target_id, None, "APPROVED", now))
+            if action not in ("APPROVE_QUOTE", "APPROVE_PO"):
+                raise ValueError("Unsupported approval action")
+            actor_id = self._log_access(db, action, target_id)
+            if actor_id is not None:
+                if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+                    raise ValueError("Approval requires a positive target revision")
+                if action == "APPROVE_QUOTE":
+                    match = db.execute("""SELECT 1 FROM quotation_revision q JOIN rfq r ON r.id = q.rfq_id
+                        WHERE r.opportunity_id = ? AND q.quotation_id = ? AND q.revision = ?
+                        AND q.status = 'APPROVED' AND trim(q.approved_by) != ''""",
+                        (opportunity_id, target_id, revision)).fetchone()
+                else:
+                    match = db.execute("""SELECT 1 FROM customer_po WHERE opportunity_id = ? AND id = ?
+                        AND quotation_revision = ? AND trim(accepted_by) != ''""",
+                        (opportunity_id, target_id, revision)).fetchone()
+                if match is None:
+                    raise ValueError("Approval target does not match reviewed record")
+                now = _utc_now()
+                approval_id = f"{action}:{target_id}:{revision}"
+                db.execute("INSERT INTO approval VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           (approval_id, opportunity_id, action, target_id, revision,
+                            None, actor_id, "APPROVED", now))
+                db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (opportunity_id, action, actor_id, target_id, None, "APPROVED", now))
+        if actor_id is None:
+            raise PermissionError(f"{action} denied for local OS account")
 
     def read_summary(self, opportunity_id: str) -> dict[str, Any] | None:
         """Read a small contact-free view suitable for diagnostics."""
+        self._require_access("READ_SUMMARY", opportunity_id)
         with closing(self._connect()) as db:
             row = db.execute("""SELECT o.id, o.status, o.revision, s.id AS order_id,
                                      s.total_text AS order_total, s.currency,
@@ -289,12 +329,35 @@ class PilotStore:
                               WHERE o.id = ?""", (opportunity_id,)).fetchone()
             return dict(row) if row is not None else None
 
+    def read_contact(self, contact_id: str) -> dict[str, Any] | None:
+        """Read contact evidence only for an authorized local operator."""
+        self._require_access("READ_CONTACT", contact_id)
+        with closing(self._connect()) as db:
+            row = db.execute("""SELECT id, buyer_id, business_email, contact_route,
+                                     source_system, source_ref, source_url, checked_at_utc, verified
+                              FROM contact_evidence WHERE id = ?""", (contact_id,)).fetchone()
+            return dict(row) if row is not None else None
+
     def backup_to(self, destination: str | Path) -> None:
         """Create a consistent SQLite backup, including sensitive contact records."""
+        self._require_access("BACKUP", str(self.path))
         destination = Path(destination)
         if destination.resolve() == self.path.resolve():
             raise ValueError("Backup destination must differ from the live database")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_symlink():
+            raise PermissionError("Backup path must not be a symlink")
+        if not destination.exists():
+            try:
+                fd = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                os.close(fd)
+            except FileExistsError:
+                pass
+        backup_metadata = destination.stat()
+        if (not stat.S_ISREG(backup_metadata.st_mode)
+                or backup_metadata.st_uid != current_uid()
+                or backup_metadata.st_mode & 0o077):
+            raise PermissionError("Backup must be owner-only and owned by the process UID")
         with closing(self._connect()) as source, closing(sqlite3.connect(destination)) as backup:
             source.backup(backup)
             if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
