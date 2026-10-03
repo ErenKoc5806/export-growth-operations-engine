@@ -1,0 +1,21 @@
+name: Pilot acceptance
+on:
+  push:
+    paths:
+      - 'pilot_engine/**'
+      - 'tests/**'
+      - '.github/workflows/pilot-tests.yml'
+  pull_request:
+    paths:
+      - 'pilot_engine/**'
+      - 'tests/**'
+      - '.github/workflows/pilot-tests.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
