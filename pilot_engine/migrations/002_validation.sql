@@ -1,5 +1,23 @@
 BEGIN IMMEDIATE;
 
+-- v1 allowed invalid revisions through append_quotation_revision. Refuse to
+-- upgrade until those rows are reviewed; triggers protect future writes only.
+CREATE TEMP TABLE _migration_validation (ok INTEGER NOT NULL CHECK(ok = 1));
+INSERT INTO _migration_validation
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM quotation_revision
+    WHERE status NOT IN ('DRAFT', 'APPROVED')
+       OR currency IS NULL OR length(currency) != 3 OR currency GLOB '*[^A-Z]*'
+       OR unit IS NULL OR length(unit) = 0 OR unit GLOB '*[^A-Z0-9_]*'
+       OR sku IS NULL OR trim(sku) = ''
+       OR (status = 'APPROVED' AND (approved_by IS NULL OR trim(approved_by) = ''))
+       OR NOT json_valid(quantity_text)
+       OR CAST(quantity_text AS REAL) <= 0
+       OR NOT json_valid(unit_price_text)
+       OR CAST(unit_price_text AS REAL) <= 0
+) THEN 0 ELSE 1 END;
+DROP TABLE _migration_validation;
+
 -- v1 ingested a full synthetic order while labeling the opportunity DISCOVERED.
 UPDATE opportunity SET status = 'SYNTHETIC_DRAFT'
 WHERE source_system = 'synthetic' AND status = 'DISCOVERED'
