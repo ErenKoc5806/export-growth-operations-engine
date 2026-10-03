@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from pilot_engine.domain import SCHEMA_VERSION
+from pilot_engine.domain import DEFAULT_PILOT_SCOPE, SCHEMA_VERSION, PilotScope
 
 
 class PilotValidationError(ValueError):
@@ -48,7 +48,35 @@ def _section(case: dict[str, Any], key: str) -> dict[str, Any]:
     return section
 
 
-def run_case(case: dict[str, Any]) -> PilotResult:
+def validate_quotation_revision(
+    quote: dict[str, Any], *, sku: str, unit: str, currency: str
+) -> tuple[Decimal, Decimal]:
+    """One validation boundary for the initial quote and every later revision."""
+    _required(quote, "id")
+    _required(quote, "rfq_id")
+    revision = quote.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise PilotValidationError("Quotation revision must be a positive integer")
+    if (quote.get("sku"), quote.get("unit"), quote.get("currency")) != (sku, unit, currency):
+        raise PilotValidationError("Quotation product, unit or currency does not match")
+    if not isinstance(quote.get("quantity"), str) or not isinstance(quote.get("unit_price"), str):
+        raise PilotValidationError("Quotation quantity and price must be decimal strings")
+    quantity = _positive_number(quote["quantity"], "quotation quantity")
+    price = _positive_number(quote["unit_price"], "unit price")
+    if unit == "PCS" and quantity != quantity.to_integral_value():
+        raise PilotValidationError("PCS quantity must be a whole number")
+    if price != price.quantize(Decimal("0.01")):
+        raise PilotValidationError("Unit price must have at most two decimal places")
+    if quote.get("status") not in ("DRAFT", "APPROVED"):
+        raise PilotValidationError("Quotation status must be DRAFT or APPROVED")
+    if quote["status"] == "APPROVED":
+        _required(quote, "approved_by")
+    elif quote.get("approved_by"):
+        raise PilotValidationError("Draft quotation cannot carry an approver")
+    return quantity, price
+
+
+def run_case(case: dict[str, Any], scope: PilotScope = DEFAULT_PILOT_SCOPE) -> PilotResult:
     """Validate one linked case and generate reviewed-only order/document drafts.
 
     The caller owns persistence, authorizations, delivery, and ERP integration.
@@ -60,6 +88,8 @@ def run_case(case: dict[str, Any]) -> PilotResult:
         raise PilotValidationError("Unsupported pilot schema version")
 
     opportunity_id = _required(case, "opportunity_id")
+    _required(case, "manufacturer_name")
+    _required(case, "operator_id")
     product = _section(case, "product")
     buyer = _section(case, "buyer")
     rfq = _section(case, "rfq")
@@ -67,8 +97,8 @@ def run_case(case: dict[str, Any]) -> PilotResult:
     po = _section(case, "customer_po")
     shipment = _section(case, "shipment")
 
-    if product.get("hs6") != "732690" or case.get("target_country") != "DE":
-        raise PilotValidationError("Pilot filter must be 732690 → DE")
+    if product.get("hs6") != scope.hs6 or case.get("target_country") != scope.country:
+        raise PilotValidationError(f"Pilot filter must be {scope.hs6} → {scope.country}")
     sku = _required(product, "sku")
     description = _required(product, "description")
     unit = _required(product, "unit")
@@ -91,30 +121,22 @@ def run_case(case: dict[str, Any]) -> PilotResult:
         raise PilotValidationError("RFQ opportunity does not match")
     if quote.get("rfq_id") != rfq_id or po.get("quotation_id") != quote_id:
         raise PilotValidationError("RFQ, quotation and PO references do not match")
-    revision = quote.get("revision")
-    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
-        raise PilotValidationError("Quotation revision must be a positive integer")
+    quote_quantity, unit_price = validate_quotation_revision(
+        quote, sku=sku, unit=unit, currency=scope.currency
+    )
+    revision = quote["revision"]
     if po.get("quotation_revision") != revision:
         raise PilotValidationError("Customer PO references a different quotation revision")
     if quote.get("status") != "APPROVED":
         raise PilotValidationError("Quotation requires a named human approver")
-    _required(quote, "approved_by")
     _required(po, "accepted_by")
 
-    quote_quantity = _positive_number(quote.get("quantity"), "quotation quantity")
     po_quantity = _positive_number(po.get("quantity"), "PO quantity")
-    unit_price = _positive_number(quote.get("unit_price"), "unit price")
     po_price = _positive_number(po.get("unit_price"), "PO unit price")
     if unit == "PCS" and po_quantity != po_quantity.to_integral_value():
         raise PilotValidationError("PCS quantity must be a whole number")
-    if unit_price != unit_price.quantize(Decimal("0.01")):
-        raise PilotValidationError("Unit price must have at most two decimal places")
-    if (quote.get("sku"), quote.get("unit"), quote.get("currency")) != (
-        sku, unit, "EUR"
-    ):
-        raise PilotValidationError("Quotation product, unit or currency does not match")
     if (po.get("sku"), po.get("unit"), po.get("currency")) != (
-        sku, unit, "EUR"
+        sku, unit, scope.currency
     ) or (po_quantity, po_price) != (quote_quantity, unit_price):
         raise PilotValidationError("Customer PO differs from approved quotation")
     total = (po_quantity * po_price).quantize(Decimal("0.01"))
@@ -138,13 +160,13 @@ def run_case(case: dict[str, Any]) -> PilotResult:
         "customer_po_id": po_id, "buyer": company, "sku": sku,
         "quotation_id": quote_id, "quotation_revision": revision,
         "quantity": str(po_quantity), "unit": unit,
-        "currency": "EUR", "unit_price": str(unit_price),
+        "currency": scope.currency, "unit_price": str(unit_price),
         "total": str(total), "status": "DRAFT_REQUIRES_REVIEW",
     }
     invoice = {
         "type": "COMMERCIAL_INVOICE_DRAFT", "order_id": order_id,
         "buyer": company, "description": description, "quantity": str(po_quantity),
-        "unit": unit, "currency": "EUR", "total": str(total),
+        "unit": unit, "currency": scope.currency, "total": str(total),
         "destination": destination, "status": "DRAFT_REQUIRES_REVIEW",
     }
     packing = {
