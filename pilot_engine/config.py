@@ -23,6 +23,7 @@ class AppConfig:
     environment: Environment
     scope: PilotScope
     data_dir: Path | None
+    secret_dir: Path | None = None
 
     @classmethod
     def from_env(cls, values: Mapping[str, str] | None = None) -> AppConfig:
@@ -61,7 +62,12 @@ class AppConfig:
                     or metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO)):
                 raise PermissionError("EGO_DATA_DIR must be owned by this OS user and mode 0700")
             data_dir = data_dir.resolve()
-        return cls(stage, scope, data_dir)
+        secret_dir = Path(env["EGO_SECRET_DIR"]).expanduser() if env.get("EGO_SECRET_DIR") else None
+        if secret_dir is not None:
+            from pilot_engine.secrets import SecretStore
+
+            secret_dir = SecretStore(secret_dir).directory.resolve()
+        return cls(stage, scope, data_dir, secret_dir)
 
     def open_store(self):
         """Open this environment's database only in its private data directory."""
@@ -70,3 +76,11 @@ class AppConfig:
         from pilot_engine.store import PilotStore
 
         return PilotStore(self.data_dir / "pilot.sqlite3", scope=self.scope)
+
+    def open_secrets(self):
+        """Return the local secret source only when a connector needs one."""
+        if self.secret_dir is None:
+            raise ValueError("EGO_SECRET_DIR is required for connector credentials")
+        from pilot_engine.secrets import SecretStore
+
+        return SecretStore(self.secret_dir)
