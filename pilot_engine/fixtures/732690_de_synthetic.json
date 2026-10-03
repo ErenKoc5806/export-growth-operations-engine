@@ -2,6 +2,8 @@
   "synthetic": true,
   "schema_version": "0.1.0",
   "opportunity_id": "PILOT-732690-DE-001",
+  "manufacturer_name": "Synthetic manufacturer",
+  "operator_id": "Synthetic Operator",
   "target_country": "DE",
   "product": {
     "hs6": "732690",
