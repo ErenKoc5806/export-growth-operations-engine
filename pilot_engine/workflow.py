@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from pilot_engine.domain import SCHEMA_VERSION
+
 
 class PilotValidationError(ValueError):
     """The case needs operator review before progressing."""
@@ -54,6 +56,8 @@ def run_case(case: dict[str, Any]) -> PilotResult:
     """
     if not isinstance(case, dict) or case.get("synthetic") is not True:
         raise PilotValidationError("Only explicitly synthetic cases are accepted")
+    if case.get("schema_version") != SCHEMA_VERSION:
+        raise PilotValidationError("Unsupported pilot schema version")
 
     opportunity_id = _required(case, "opportunity_id")
     product = _section(case, "product")
@@ -72,6 +76,9 @@ def run_case(case: dict[str, Any]) -> PilotResult:
     contact = _required(buyer, "business_email")
     source = _required(buyer, "source_url")
     _required(buyer, "checked_at")
+    _required(buyer, "source_ref")
+    if buyer.get("source_system") != "synthetic":
+        raise PilotValidationError("Synthetic contact must declare its source system")
     if not source.startswith("https://") or buyer.get("verified") is not True:
         raise PilotValidationError("Buyer contact needs verified source evidence")
     if "@" not in contact:
@@ -84,6 +91,11 @@ def run_case(case: dict[str, Any]) -> PilotResult:
         raise PilotValidationError("RFQ opportunity does not match")
     if quote.get("rfq_id") != rfq_id or po.get("quotation_id") != quote_id:
         raise PilotValidationError("RFQ, quotation and PO references do not match")
+    revision = quote.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise PilotValidationError("Quotation revision must be a positive integer")
+    if po.get("quotation_revision") != revision:
+        raise PilotValidationError("Customer PO references a different quotation revision")
     if quote.get("status") != "APPROVED":
         raise PilotValidationError("Quotation requires a named human approver")
     _required(quote, "approved_by")
@@ -124,6 +136,7 @@ def run_case(case: dict[str, Any]) -> PilotResult:
     order = {
         "id": order_id, "opportunity_id": opportunity_id,
         "customer_po_id": po_id, "buyer": company, "sku": sku,
+        "quotation_id": quote_id, "quotation_revision": revision,
         "quantity": str(po_quantity), "unit": unit,
         "currency": "EUR", "unit_price": str(unit_price),
         "total": str(total), "status": "DRAFT_REQUIRES_REVIEW",
@@ -142,7 +155,7 @@ def run_case(case: dict[str, Any]) -> PilotResult:
         "status": "DRAFT_REQUIRES_REVIEW",
     }
     events = (
-        {"stage": "FIND", "reference": source, "decision": "CONTACT_VERIFIED"},
+        {"stage": "FIND", "reference": _required(buyer, "source_ref"), "decision": "CONTACT_VERIFIED"},
         {"stage": "SELL", "reference": quote_id, "decision": "QUOTE_APPROVED"},
         {"stage": "EXECUTE", "reference": po_id, "decision": "PO_RECONCILED"},
     )
