@@ -84,3 +84,11 @@ class AppConfig:
         from pilot_engine.secrets import SecretStore
 
         return SecretStore(self.secret_dir)
+
+    def open_observer(self):
+        """Write operational records beside the local pilot database."""
+        if self.data_dir is None:
+            raise ValueError("EGO_DATA_DIR is required for operational logs")
+        from pilot_engine.observability import PilotLogger
+
+        return PilotLogger(self.data_dir / "operations.jsonl")
