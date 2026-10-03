@@ -5,3 +5,6 @@ __pycache__/
 *.db
 *.db-*
 *.bak
+.env
+.env.*
+!.env.example
