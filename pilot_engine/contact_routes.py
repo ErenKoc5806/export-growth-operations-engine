@@ -31,6 +31,40 @@ def _observation_hash(db: object, route_id: str) -> str:
     return hashlib.sha256(repr((observed, corrections)).encode("utf-8")).hexdigest()
 
 
+def _route_ready(db: object, route: object) -> tuple[object, object]:
+    """Return the effective check and collection decision inside one DB transaction."""
+    if route is None or route["suppressed"]:
+        raise ValueError("Active contact route is required")
+    if _current_status(db, route["product_id"], route["candidate_id"])["status"] != "QUALIFIED":
+        raise ValueError("Current qualified company/product fit is required")
+    kind = "BUSINESS_ROUTE" if route["kind"] == "CONTACT_FORM" else "PERSONAL_ROUTE"
+    policy = db.execute("""SELECT * FROM contact_collection_policy
+        WHERE source_system = ? AND source_ref = ? AND data_class = ?
+        ORDER BY sequence DESC LIMIT 1""",
+        (route["source_system"], route["source_ref"], kind)).fetchone()
+    if (policy is None or policy["decision"] != "ALLOW" or policy["source_url"] != route["source_url"]
+            or datetime.fromisoformat(policy["retention_until_utc"]) <= datetime.now(timezone.utc)):
+        raise ValueError("Current collection decision is required")
+    check = db.execute("""SELECT * FROM contact_route_check WHERE route_id = ?
+        ORDER BY sequence DESC LIMIT 1""", (route["id"],)).fetchone()
+    if (check is None or check["result"] != "ROUTE_CONFIRMED"
+            or check["observation_sha256"] != _observation_hash(db, route["id"])
+            or datetime.now(timezone.utc) - datetime.fromisoformat(check["checked_at_utc"]) >=
+            timedelta(days=FRESHNESS_DAYS)):
+        raise ValueError("Current verified route check is required")
+    checked_policy = db.execute("""SELECT * FROM contact_collection_policy WHERE sequence = ?""",
+                                (check["policy_sequence"],)).fetchone()
+    if (checked_policy is None or checked_policy["decision"] != "ALLOW"
+            or datetime.fromisoformat(checked_policy["retention_until_utc"]) <= datetime.now(timezone.utc)
+            or not db.execute("""SELECT 1 FROM contact_collection_policy WHERE sequence = ?
+                AND sequence = (SELECT MAX(sequence) FROM contact_collection_policy
+                WHERE source_system = ? AND source_ref = ? AND data_class = ?)""",
+                (check["policy_sequence"], checked_policy["source_system"],
+                 checked_policy["source_ref"], checked_policy["data_class"])).fetchone()):
+        raise ValueError("Route check has an outdated source decision")
+    return check, policy
+
+
 def _route_value(kind: str, value: str) -> tuple[str, str]:
     if kind not in KINDS or not isinstance(value, str) or not value or value != value.strip():
         raise ValueError("Contact kind and route value are required")
@@ -315,6 +349,10 @@ class ContactRoutes:
                     result["status"] = "REVIEW_REQUIRED"
                 elif latest_check["result"] == "ROUTE_CONFIRMED":
                     result["status"] = "VERIFIED_ROUTE"
+                    try:
+                        _route_ready(db, row)
+                    except ValueError:
+                        result["status"] = "REVIEW_REQUIRED"
             result["source_use_status"] = ("EXPIRED" if expired else
                                            "REVOKED" if source_blocked else "REVIEWED_ALLOWED")
             if expired or row["suppressed"]:

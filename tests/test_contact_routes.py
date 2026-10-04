@@ -8,6 +8,7 @@ from pathlib import Path
 from pilot_engine.access import LocalAccess, Role
 from pilot_engine.candidates import CandidateDiscovery
 from pilot_engine.contact_routes import ContactRoutes
+from pilot_engine.find_handoff import FindHandoff
 from pilot_engine.profiles import ProductProfiles
 from pilot_engine.qualification import BuyerQualification
 from pilot_engine.store import PilotStore
@@ -78,7 +79,7 @@ class ContactRouteTests(unittest.TestCase):
                                      "source_ref": "FORM-1"})
         self.assertEqual(form["status"], "UNVERIFIED")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
 
     def test_named_route_suppression_and_conflicting_evidence(self):
         self.qualify()
@@ -236,6 +237,8 @@ class ContactRouteTests(unittest.TestCase):
 
     def test_v9_upgrade_preserves_prior_profile_and_candidate(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TABLE find_handoff_revision")
+            db.execute("DROP TABLE find_handoff")
             db.execute("DROP TABLE contact_route_check")
             for table in ("contact_route_observation", "contact_route_correction",
                           "discovered_contact_route", "contact_route_absence",
@@ -246,19 +249,77 @@ class ContactRouteTests(unittest.TestCase):
         self.assertIsNotNone(ProductProfiles(reopened).read(self.product_id))
         self.assertIsNotNone(CandidateDiscovery(reopened).read(self.candidate_id))
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
 
     def test_v10_upgrade_preserves_contact_route(self):
         self.qualify()
         self.policy()
         route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TABLE find_handoff_revision")
+            db.execute("DROP TABLE find_handoff")
             db.execute("DROP TABLE contact_route_check")
             db.execute("PRAGMA user_version = 10")
         reopened = ContactRoutes(PilotStore(self.path))
         self.assertEqual(reopened.read(route["id"])["route_value"], "sales@example.org")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
+
+    def test_handoff_versions_current_evidence_without_duplicate_identity(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
+        self.routes.check(route["id"], method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                          source_url="https://example.org/contact", checked_at_utc="2026-10-04T00:00:00Z",
+                          explanation="Synthetic route on company page")
+        handoffs = FindHandoff(self.store)
+        with self.assertRaisesRegex(ValueError, "Real Find handoff"):
+            handoffs.record(self.product_id, self.candidate_id, route["id"], data_origin="REAL")
+        handoff_id, rev = handoffs.record(self.product_id, self.candidate_id, route["id"])
+        self.assertEqual(rev, 1)
+        self.assertEqual(handoffs.record(self.product_id, self.candidate_id, route["id"]),
+                         (handoff_id, 1))
+        self.assertEqual(handoffs.read(handoff_id)["status"], "CURRENT_RESEARCH")
+        self.assertEqual(handoffs.read(handoff_id)["market_country"], "DE")
+        self.assertTrue(handoffs.read(handoff_id)["manufacturer_id"].startswith("M-"))
+        self.assertFalse(handoffs.read(handoff_id)["send_allowed"])
+        self.policy(source_ref="CONTACT-2", source_url="https://example.org/about")
+        self.routes.record(self.product_id, self.candidate_id, **{
+            **self.kwargs, "source_ref": "CONTACT-2", "source_url": "https://example.org/about",
+            "observed_at_utc": "2026-10-04T01:00:00Z"})
+        self.assertEqual(handoffs.read(handoff_id)["status"], "REVIEW_REQUIRED")
+        with self.assertRaisesRegex(ValueError, "verified route"):
+            handoffs.record(self.product_id, self.candidate_id, route["id"])
+        self.routes.check(route["id"], method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                          source_url="https://example.org/about", checked_at_utc="2026-10-04T01:00:00Z",
+                          explanation="Rechecked new synthetic observation")
+        self.assertEqual(handoffs.record(self.product_id, self.candidate_id, route["id"]),
+                         (handoff_id, 2))
+        self.assertEqual(handoffs.read(handoff_id)["status"], "CURRENT_RESEARCH")
+        self.routes.suppress("GENERIC_EMAIL", "sales@example.org", "Synthetic opt-out")
+        self.assertEqual(handoffs.read(handoff_id)["status"], "REVIEW_REQUIRED")
+        self.assertIsNone(handoffs.read(handoff_id)["route_value"])
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM find_handoff").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM find_handoff_revision").fetchone()[0], 2)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                db.execute("DELETE FROM find_handoff_revision")
+
+    def test_v11_upgrade_preserves_contact_check(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
+        self.routes.check(route["id"], method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                          source_url="https://example.org/contact", checked_at_utc="2026-10-04T00:00:00Z",
+                          explanation="Synthetic route on company page")
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TABLE find_handoff_revision")
+            db.execute("DROP TABLE find_handoff")
+            db.execute("PRAGMA user_version = 11")
+        reopened = ContactRoutes(PilotStore(self.path))
+        self.assertEqual(reopened.read(route["id"])["status"], "VERIFIED_ROUTE")
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
 
 
 if __name__ == "__main__":
