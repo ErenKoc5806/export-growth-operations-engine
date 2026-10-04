@@ -22,7 +22,7 @@ MIGRATION_FILES = (
     "001_initial.sql", "002_validation.sql", "003_access.sql",
     "004_immutable_approval.sql", "005_product_profile.sql",
     "006_market_signal.sql", "007_buyer_candidate.sql",
-    "008_buyer_qualification.sql",
+    "008_buyer_qualification.sql", "009_profile_documents.sql",
 )
 
 
@@ -249,7 +249,7 @@ class PilotStore:
                 pending = db.execute("""SELECT 1 FROM profile_revalidation
                     WHERE opportunity_id = ? AND reviewed_revision < required_revision""",
                     (opportunity_id,)).fetchone()
-                if pending is not None:
+                if pending is not None and target != OpportunityStatus.CLOSED:
                     raise ValueError("Product profile changed; buyer fit and outreach need re-review")
                 require_transition(current, target)
                 self._require_approval(

@@ -38,7 +38,7 @@ class OpportunityStatus(StrEnum):
 
 ALLOWED_TRANSITIONS: dict[OpportunityStatus, frozenset[OpportunityStatus]] = {
     OpportunityStatus.SYNTHETIC_DRAFT: frozenset(),
-    OpportunityStatus.DISCOVERED: frozenset({OpportunityStatus.CONTACT_REVIEW}),
+    OpportunityStatus.DISCOVERED: frozenset({OpportunityStatus.CONTACT_REVIEW, OpportunityStatus.CLOSED}),
     OpportunityStatus.CONTACT_REVIEW: frozenset({OpportunityStatus.CONTACT_READY, OpportunityStatus.CLOSED}),
     OpportunityStatus.CONTACT_READY: frozenset({OpportunityStatus.OUTREACH_REVIEW, OpportunityStatus.CLOSED}),
     OpportunityStatus.OUTREACH_REVIEW: frozenset({OpportunityStatus.RFQ_RECEIVED, OpportunityStatus.CLOSED}),

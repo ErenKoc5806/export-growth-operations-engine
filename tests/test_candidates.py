@@ -72,6 +72,18 @@ class CandidateDiscoveryTests(unittest.TestCase):
                 ti, source_ref="TI-RUN-1:2", query="clamps Germany",
                 observed_at_utc="2026-10-04T15:00:00Z")
 
+    def test_host_variants_and_related_subdomain_are_visible(self):
+        first = self.candidates.record(**self.input)
+        trailing = dict(self.input, source_ref="RUN-DOT", website="https://example.org./",
+                        evidence_urls=["https://example.org./clamps"])
+        self.assertEqual(self.candidates.record(**trailing)["id"], first["id"])
+        sub = dict(self.input, source_ref="RUN-SUB", name="Example Shop",
+                   website="https://shop.example.org/", evidence_urls=["https://shop.example.org/clamps"])
+        separate = self.candidates.record(**sub)
+        self.assertNotEqual(separate["id"], first["id"])
+        self.assertIn(first["id"], separate["possible_duplicates"])
+        self.assertIn(separate["id"], self.candidates.read(first["id"])["possible_duplicates"])
+
     def test_bad_source_and_viewer_denial(self):
         for wrong in (dict(self.input, evidence_urls=[]),
                       dict(self.input, evidence_urls=["http://example.org"]),
@@ -85,6 +97,9 @@ class CandidateDiscoveryTests(unittest.TestCase):
 
     def test_v6_upgrade_retains_market_signal_table(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER profile_source_no_update")
+            db.execute("DROP TRIGGER profile_source_no_delete")
+            db.execute("DROP TABLE profile_source_document")
             db.execute("DROP TRIGGER buyer_fit_no_update")
             db.execute("DROP TRIGGER buyer_fit_no_delete")
             db.execute("DROP TABLE buyer_fit_decision")
@@ -97,7 +112,7 @@ class CandidateDiscoveryTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 6")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 9)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name = 'market_signal_snapshot'").fetchone())
 
 

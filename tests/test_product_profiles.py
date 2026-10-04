@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -23,6 +25,10 @@ def example_profile():
         "hs6": "732690", "classification_status": "REVIEWED",
         "classification_note": "Example research filter; actual tariff classification needs review",
         "source_kind": "MANUFACTURER", "source_ref": "EXAMPLE-SOURCE-1",
+        "source_sha256": hashlib.sha256(b"invented test document").hexdigest(),
+        "minimum_order_quantity": "100", "lead_time_days": 14,
+        "payment_terms": "Example advance payment", "incoterm_code": "FCA",
+        "incoterm_place": "Example city",
         "claims": [{"text": "Connection clamp", "confirmed_use": True,
                     "evidence_ref": "EXAMPLE-DRAWING-1"}],
         "search_terms": [{"text": "connection clamp", "confirmed_use": True,
@@ -39,6 +45,7 @@ class ProductProfileTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "pilot.sqlite3"
         self.store = PilotStore(self.path)
         self.profiles = ProductProfiles(self.store)
+        self.profiles.register_source_document("EXAMPLE-SOURCE-1", b"invented test document")
 
     def test_draft_approval_and_terms_are_bound_to_current_revision(self):
         draft = {"manufacturer_name": "Example Clamp Works", "product_name": "Connection clamp",
@@ -125,8 +132,17 @@ class ProductProfileTests(unittest.TestCase):
         product_id, _ = self.profiles.save_draft(example_profile())
         with self.assertRaises(PermissionError):
             viewer.read(product_id)
+        with self.assertRaises(PermissionError):
+            viewer.save_draft({"manufacturer_name": "", "product_name": ""})
+        with closing(sqlite3.connect(self.path)) as db:
+            denied = db.execute("""SELECT COUNT(*) FROM access_decision
+                WHERE permission = 'EDIT_PROFILE' AND allowed = 0""").fetchone()[0]
+            self.assertEqual(denied, 2)
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 9)
+            db.execute("DROP TRIGGER profile_source_no_update")
+            db.execute("DROP TRIGGER profile_source_no_delete")
+            db.execute("DROP TABLE profile_source_document")
             db.execute("DROP TRIGGER buyer_fit_no_update")
             db.execute("DROP TRIGGER buyer_fit_no_delete")
             db.execute("DROP TABLE buyer_fit_decision")
@@ -150,7 +166,72 @@ class ProductProfileTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 4")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 9)
+
+    def test_manufacturer_reused_and_document_digest_is_bound(self):
+        first, _ = self.profiles.save_draft(example_profile())
+        second_payload = example_profile()
+        second_payload.update(product_name="Other clamp", sku="EXAMPLE-002")
+        second, _ = self.profiles.save_draft(second_payload)
+        with closing(sqlite3.connect(self.path)) as db:
+            ids = [db.execute("SELECT manufacturer_id FROM product WHERE id = ?", (p,)).fetchone()[0]
+                   for p in (first, second)]
+            self.assertEqual(ids[0], ids[1])
+        wrong = example_profile()
+        wrong["source_sha256"] = "0" * 64
+        third, _ = self.profiles.save_draft(wrong)
+        with self.assertRaisesRegex(ValueError, "source document hash"):
+            self.profiles.decide(third, 1, "APPROVED", "unmatched")
+        with self.assertRaisesRegex(ValueError, "already bound"):
+            self.profiles.register_source_document("EXAMPLE-SOURCE-1", b"changed original")
+        self.profiles.decide(second, 1, "APPROVED", "synthetic example")
+        with closing(sqlite3.connect(self.path)) as db:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                db.execute("UPDATE profile_source_document SET sha256 = 'wrong'")
+
+    def test_commercial_inputs_and_legacy_approval_require_new_revision(self):
+        invalid = example_profile()
+        invalid["minimum_order_quantity"] = "0"
+        with self.assertRaisesRegex(ValueError, "minimum_order_quantity"):
+            self.profiles.save_draft(invalid)
+        invalid = example_profile()
+        invalid["incoterm_code"] = "INVALID"
+        with self.assertRaisesRegex(ValueError, "Incoterms"):
+            self.profiles.save_draft(invalid)
+        product_id, _ = self.profiles.save_draft(example_profile())
+        self.profiles.decide(product_id, 1, "APPROVED", "example review")
+        # Simulate an approval created before v9's new evidence requirements.
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER profile_revision_no_update")
+            old = example_profile()
+            old.pop("source_sha256")
+            old.pop("minimum_order_quantity")
+            old.pop("lead_time_days")
+            old.pop("payment_terms")
+            old.pop("incoterm_code")
+            old.pop("incoterm_place")
+            legacy_json = json.dumps(old, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            db.execute("""UPDATE product_profile_revision SET payload_json = ?, payload_sha256 = ?
+                WHERE product_id = ?""", (legacy_json, hashlib.sha256(legacy_json.encode()).hexdigest(),
+                                           product_id))
+        self.assertFalse(self.profiles.read(product_id)["approved"])
+        with self.assertRaisesRegex(ValueError, "Current manufacturer"):
+            self.profiles.require_current_approval(product_id, 1)
+
+    def test_revoked_profile_can_close_open_opportunity(self):
+        product_id, _ = self.profiles.save_draft(example_profile())
+        self.profiles.decide(product_id, 1, "APPROVED", "example review")
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("INSERT INTO market_target VALUES ('T-1', ?, 'DE', '[]', 'now')", (product_id,))
+            db.execute("INSERT INTO buyer_company VALUES ('B-1', 'Example Buyer', 'DE', 'BUYER', 'now')")
+            db.execute("""INSERT INTO opportunity VALUES
+                ('O-CLOSE', ?, 'T-1', 'B-1', 'test', 'DISCOVERED', 1, 'test', 'O-CLOSE', 'now', 'now')""",
+                (product_id,))
+        self.profiles.decide(product_id, 1, "REVOKED", "product withdrawn")
+        with self.assertRaisesRegex(ValueError, "not approved"):
+            self.profiles.acknowledge_revalidation("O-CLOSE", 1, "cannot re-review")
+        self.store.transition("O-CLOSE", OpportunityStatus.CLOSED)
+        self.assertEqual(self.store.read_summary("O-CLOSE")["status"], "CLOSED")
 
 
 if __name__ == "__main__":

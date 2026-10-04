@@ -7,6 +7,7 @@ import json
 from contextlib import closing
 from typing import Any
 
+from pilot_engine.profiles import _approval_valid
 from pilot_engine.store import PilotStore, _json, _utc_now
 
 
@@ -40,7 +41,7 @@ class BuyerQualification:
             raise ValueError("Profile revision must be positive")
         actor = self.store._require_access("QUALIFY_CANDIDATE", candidate_id)
         with self.store._transaction() as db:
-            profile = db.execute("""SELECT revision, payload_sha256 FROM product_profile_revision
+            profile = db.execute("""SELECT revision, payload_sha256, payload_json FROM product_profile_revision
                 WHERE product_id = ? ORDER BY revision DESC LIMIT 1""", (product_id,)).fetchone()
             if profile is None or profile["revision"] != profile_revision:
                 raise ValueError("Current manufacturer profile revision is required")
@@ -56,7 +57,8 @@ class BuyerQualification:
                 approval = db.execute("""SELECT action FROM product_profile_event
                     WHERE product_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
                     (product_id, profile_revision)).fetchone()
-                if approval is None or approval["action"] != "APPROVED":
+                if (approval is None or approval["action"] != "APPROVED"
+                        or not _approval_valid(db, json.loads(profile["payload_json"]))):
                     raise ValueError("Manufacturer profile approval is required")
                 if any(checks[key] != "CONFIRMED" for key in CHECKS):
                     raise ValueError("All product, role and corridor checks must be confirmed")
@@ -80,7 +82,7 @@ class BuyerQualification:
                 return {"status": "UNQUALIFIED", "outreach_allowed": False}
             result = dict(latest)
             result["checks"] = json.loads(result.pop("checks_json"))
-            current = db.execute("""SELECT revision, payload_sha256 FROM product_profile_revision
+            current = db.execute("""SELECT revision, payload_sha256, payload_json FROM product_profile_revision
                 WHERE product_id = ? ORDER BY revision DESC LIMIT 1""", (product_id,)).fetchone()
             evidence_ids = [row[0] for row in db.execute("""SELECT id FROM buyer_candidate_evidence
                 WHERE candidate_id = ?""", (candidate_id,))]
@@ -91,7 +93,8 @@ class BuyerQualification:
                      or current["payload_sha256"] != result["profile_sha256"]
                      or _hash_ids(evidence_ids) != result["evidence_sha256"]
                      or (result["outcome"] == "ACCEPT" and
-                         (approval is None or approval["action"] != "APPROVED")))
+                         (approval is None or approval["action"] != "APPROVED"
+                          or not _approval_valid(db, json.loads(current["payload_json"])))))
             result["status"] = ("REVIEW_REQUIRED" if stale else
                                 "QUALIFIED" if result["outcome"] == "ACCEPT" else result["outcome"])
             # Qualification alone never authorizes a contact or external message.

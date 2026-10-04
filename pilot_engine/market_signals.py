@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from contextlib import closing
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from pilot_engine.store import PilotStore, _json, _utc_now
+from pilot_engine.retry import ReadRetryPolicy, TransientReadError
 
 
 PREVIEW_ENDPOINT = "https://comtradeapi.un.org/public/v1/preview/C/A/HS"
@@ -25,6 +27,10 @@ LIMITATIONS = (
     "Reporter import statistics may differ from exporter-reported flows and product years.",
 )
 MAX_RESPONSE_BYTES = 1_000_000
+
+
+class PermanentReadError(Exception):
+    """An HTTP rejection that should never be retried automatically."""
 
 
 def _amount(value: Any) -> str:
@@ -66,6 +72,8 @@ class MarketSignals:
 
     def fetch_public_preview(
         self, year: int, *, opener: Callable[..., Any] = urlopen,
+        retry_policy: ReadRetryPolicy | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> dict[str, Any]:
         """Explicit, bounded read of the public API; network is never used on import."""
         query = self._query(year)
@@ -76,8 +84,18 @@ class MarketSignals:
         status, category, value, weight, description = "FAILED", "TRANSPORT", None, None, None
         quality: dict[str, Any] = {}
         try:
-            with closing(opener(request, timeout=15)) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
+            def read_once() -> bytes:
+                try:
+                    with closing(opener(request, timeout=15)) as response:
+                        return response.read(MAX_RESPONSE_BYTES + 1)
+                except HTTPError as exc:
+                    if exc.code == 429 or 500 <= exc.code < 600:
+                        raise TransientReadError("Temporary public API response") from exc
+                    raise PermanentReadError("Public API rejected the read") from exc
+                except (URLError, TimeoutError, OSError) as exc:
+                    raise TransientReadError("Temporary public API read failure") from exc
+
+            raw = (retry_policy or ReadRetryPolicy()).run(read_once, sleep=sleep)
             if len(raw) > MAX_RESPONSE_BYTES:
                 raise ValueError("Oversized response")
             payload = json.loads(raw)
@@ -88,27 +106,38 @@ class MarketSignals:
             rows = payload["data"]
             if not rows:
                 status, category = "MISSING", None
-            elif len(rows) != 1:
-                status, category = "FAILED", "AMBIGUOUS_ROWS"
             else:
-                row = rows[0]
-                if (not isinstance(row, dict) or str(row.get("cmdCode")) != query["cmdCode"]
-                        or str(row.get("reporterCode")) != query["reporterCode"]
-                        or str(row.get("partnerCode")) != "0"
-                        or str(row.get("flowCode")) != "M"
-                        or str(row.get("period")) != query["period"]):
-                    raise ValueError("Mismatched response scope")
-                value = _amount(row.get("primaryValue"))
-                weight = (_amount(row["netWgt"]) if row.get("netWgt") is not None else None)
-                description = str(row.get("cmdDesc") or "")[:500]
-                quality = {key: row.get(key) for key in (
-                    "classificationCode", "isOriginalClassification", "isAggregate",
-                    "isReported", "isNetWgtEstimated", "isQtyEstimated",
-                )}
-                status, category = "AVAILABLE", None
-        except (URLError, TimeoutError, OSError):
-            pass
-        except (ValueError, TypeError, json.JSONDecodeError):
+                for item in rows:
+                    if (not isinstance(item, dict) or str(item.get("cmdCode")) != query["cmdCode"]
+                            or str(item.get("reporterCode")) != query["reporterCode"]
+                            or str(item.get("partnerCode")) != "0"
+                            or str(item.get("flowCode")) != "M"
+                            or str(item.get("period")) != query["period"]):
+                        raise ValueError("Mismatched response scope")
+                canonical = [item for item in rows
+                             if item.get("customsCode") in (None, "C00")
+                             and str(item.get("motCode", 0)) in ("0", "None")
+                             and str(item.get("partner2Code", 0)) in ("0", "None")
+                             and item.get("isAggregate") is not False]
+                if len(canonical) != 1:
+                    status, category = "FAILED", "AMBIGUOUS_ROWS"
+                else:
+                    row = canonical[0]
+                    value = _amount(row.get("primaryValue"))
+                    weight = (_amount(row["netWgt"]) if row.get("netWgt") is not None else None)
+                    description = str(row.get("cmdDesc") or "")[:500]
+                    quality = {key: row.get(key) for key in (
+                        "classificationCode", "isOriginalClassification", "isAggregate",
+                        "isReported", "isNetWgtEstimated", "isQtyEstimated",
+                    )}
+                    quality["responseRows"] = len(rows)
+                    quality["selectedCanonicalAggregate"] = True
+                    status, category = "AVAILABLE", None
+        except TransientReadError:
+            category = "TRANSIENT_READ"
+        except PermanentReadError:
+            category = "HTTP_ERROR"
+        except (ValueError, TypeError):
             category = "INVALID_RESPONSE"
         return self._save(
             source_system="UN_COMTRADE_PREVIEW", source_url=url, query=query,

@@ -30,7 +30,11 @@ def _url(value: object) -> str:
 
 def _domain(url: str) -> str:
     host = urlsplit(url).hostname or ""
-    return host.removeprefix("www.").lower()
+    return host.rstrip(".").removeprefix("www.").lower()
+
+
+def _related_domain(first: str | None, second: str | None) -> bool:
+    return bool(first and second and (first.endswith("." + second) or second.endswith("." + first)))
 
 
 class CandidateDiscovery:
@@ -88,8 +92,10 @@ class CandidateDiscovery:
                                    (candidate_id, name))
                 else:
                     candidate_id = f"BC-{uuid4()}"
-                    possible = db.execute("""SELECT id FROM buyer_candidate WHERE country_code = ?
-                        AND lower(name) = lower(?) LIMIT 1""", (country_code, name)).fetchone()
+                    possible = next((item for item in db.execute("""SELECT id, name, domain
+                        FROM buyer_candidate WHERE country_code = ? ORDER BY created_at_utc, id""",
+                        (country_code,)) if item["name"].casefold() == name.casefold()
+                        or _related_domain(item["domain"], domain)), None)
                     db.execute("""INSERT INTO buyer_candidate
                         (id, name, country_code, website, domain, role_hypothesis,
                          possible_duplicate_of, created_at_utc)
@@ -135,6 +141,10 @@ class CandidateDiscovery:
             result["aliases"] = [entry[0] for entry in db.execute(
                 "SELECT alias FROM buyer_candidate_alias WHERE candidate_id = ? ORDER BY alias",
                 (candidate_id,))]
+            result["possible_duplicates"] = [entry["id"] for entry in db.execute("""SELECT
+                id, name, domain FROM buyer_candidate WHERE country_code = ? AND id != ?""",
+                (row["country_code"], candidate_id)) if (entry["name"].casefold() == row["name"].casefold()
+                or _related_domain(entry["domain"], row["domain"]))]
             result["evidence"] = [dict(entry) for entry in db.execute("""SELECT id, source_system,
                 source_ref, source_url, observed_name, observed_website, role_hint,
                 observed_at_utc, query_text, summary
