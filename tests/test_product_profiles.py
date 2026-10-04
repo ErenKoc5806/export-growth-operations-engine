@@ -139,7 +139,8 @@ class ProductProfileTests(unittest.TestCase):
                 WHERE permission = 'EDIT_PROFILE' AND allowed = 0""").fetchone()[0]
             self.assertEqual(denied, 2)
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 10)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
+            db.execute("DROP TABLE contact_route_check")
             for table in ("contact_route_observation", "contact_route_correction", "discovered_contact_route",
                           "contact_route_absence", "contact_suppression", "contact_collection_policy"):
                 db.execute(f"DROP TABLE {table}")
@@ -169,7 +170,7 @@ class ProductProfileTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 4")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 10)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
 
     def test_manufacturer_reused_and_document_digest_is_bound(self):
         original = example_profile()
