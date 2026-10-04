@@ -169,9 +169,12 @@ class ProductProfileTests(unittest.TestCase):
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 9)
 
     def test_manufacturer_reused_and_document_digest_is_bound(self):
-        first, _ = self.profiles.save_draft(example_profile())
+        original = example_profile()
+        original["manufacturer_legal_id"] = "TR-111"
+        first, _ = self.profiles.save_draft(original)
         second_payload = example_profile()
-        second_payload.update(product_name="Other clamp", sku="EXAMPLE-002")
+        second_payload.update(product_name="Other clamp", sku="EXAMPLE-002",
+                              manufacturer_legal_id="TR-111", manufacturer_name="EXAMPLE CLAMP WORKS")
         second, _ = self.profiles.save_draft(second_payload)
         with closing(sqlite3.connect(self.path)) as db:
             ids = [db.execute("SELECT manufacturer_id FROM product WHERE id = ?", (p,)).fetchone()[0]
@@ -179,6 +182,7 @@ class ProductProfileTests(unittest.TestCase):
             self.assertEqual(ids[0], ids[1])
         wrong = example_profile()
         wrong["source_sha256"] = "0" * 64
+        wrong["manufacturer_legal_id"] = "TR-111"
         third, _ = self.profiles.save_draft(wrong)
         with self.assertRaisesRegex(ValueError, "source document hash"):
             self.profiles.decide(third, 1, "APPROVED", "unmatched")
@@ -188,6 +192,47 @@ class ProductProfileTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db:
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE profile_source_document SET sha256 = 'wrong'")
+
+    def test_legal_id_separates_same_names_and_name_only_requires_selection(self):
+        unverified, _ = self.profiles.save_draft(example_profile())
+        first = example_profile()
+        first["manufacturer_legal_id"] = "TR-111"
+        first_product, _ = self.profiles.save_draft(first)
+        second = example_profile()
+        second["manufacturer_legal_id"] = "TR-222"
+        second_product, _ = self.profiles.save_draft(second)
+        ids = [self.profiles.read(pid)["manufacturer_id"] for pid in
+               (unverified, first_product, second_product)]
+        self.assertEqual(len(set(ids)), 3)
+        with self.assertRaisesRegex(ValueError, "Name-only manufacturer match"):
+            self.profiles.save_draft(example_profile())
+        linked, _ = self.profiles.save_draft(example_profile(), manufacturer_id=ids[0])
+        self.assertEqual(self.profiles.read(linked)["manufacturer_id"], ids[0])
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            self.profiles.save_draft(second, manufacturer_id=ids[1])
+        with self.assertRaisesRegex(ValueError, "different manufacturer"):
+            self.profiles.save_draft(first, manufacturer_id=ids[0])
+        conflicting_revision = example_profile()
+        conflicting_revision["manufacturer_legal_id"] = "TR-222"
+        with self.assertRaisesRegex(ValueError, "Legal ID belongs to a different"):
+            self.profiles.save_draft(conflicting_revision, product_id=unverified, expected_revision=1)
+
+    def test_turkish_i_variants_are_name_hints_only(self):
+        first = example_profile()
+        first["manufacturer_name"] = "KIRIKKALE CLAMP"
+        product_id, _ = self.profiles.save_draft(first)
+        second = example_profile()
+        second["manufacturer_name"] = "Kırıkkale Clamp"
+        with self.assertRaisesRegex(ValueError, "Name-only manufacturer match"):
+            self.profiles.save_draft(second)
+        another, _ = self.profiles.save_draft(
+            second, manufacturer_id=self.profiles.read(product_id)["manufacturer_id"])
+        self.assertEqual(self.profiles.read(another)["manufacturer_id"],
+                         self.profiles.read(product_id)["manufacturer_id"])
+        third = example_profile()
+        third["manufacturer_name"] = "KİRİKKALE CLAMP"
+        with self.assertRaisesRegex(ValueError, "Name-only manufacturer match"):
+            self.profiles.save_draft(third)
 
     def test_commercial_inputs_and_legacy_approval_require_new_revision(self):
         invalid = example_profile()

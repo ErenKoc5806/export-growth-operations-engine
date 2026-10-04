@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from contextlib import closing
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -30,6 +31,11 @@ REQUIRED_FOR_APPROVAL = (
 INCOTERMS = frozenset({"EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF"})
 
 
+def _name_key(name: str) -> str:
+    """Use a comparison hint, not a legal identity (I/İ/ı/i compare equally)."""
+    return unicodedata.normalize("NFKC", name).casefold().replace("ı", "i").replace("i\u0307", "i")
+
+
 def _validate(payload: dict[str, Any], *, approval: bool = False) -> None:
     if not isinstance(payload, dict) or set(payload) - FIELDS:
         raise ValueError("Unknown or invalid product profile fields")
@@ -40,6 +46,8 @@ def _validate(payload: dict[str, Any], *, approval: bool = False) -> None:
     for key in ("manufacturer_name", "product_name"):
         if not payload.get(key):
             raise ValueError(f"{key} is required even for a draft")
+    if payload.get("manufacturer_legal_id") and not payload.get("manufacturer_country"):
+        raise ValueError("Manufacturer legal ID needs a country")
     if payload.get("lead_time_days") is not None and (type(payload["lead_time_days"]) is not int
             or payload["lead_time_days"] <= 0):
         raise ValueError("lead_time_days must be a positive integer")
@@ -127,7 +135,7 @@ class ProductProfiles:
 
     def save_draft(
         self, payload: dict[str, Any], *, product_id: str | None = None,
-        expected_revision: int = 0,
+        expected_revision: int = 0, manufacturer_id: str | None = None,
     ) -> tuple[str, int]:
         product_id = product_id or f"P-{uuid4()}"
         actor = self.store._require_access("EDIT_PROFILE", product_id)
@@ -149,24 +157,48 @@ class ProductProfiles:
             if current == 0:
                 if db.execute("SELECT 1 FROM product WHERE id = ?", (product_id,)).fetchone():
                     raise ValueError("Product already exists without a profile")
-                # Reuse only an exact, country-scoped identity. A changed identity
-                # on an existing product must be reviewed as a separate correction.
-                identity = (payload["manufacturer_name"].casefold(), payload.get("manufacturer_country"))
-                existing = db.execute("""SELECT m.id, r.payload_json FROM manufacturer m
+                existing = db.execute("""SELECT DISTINCT m.id, r.payload_json FROM manufacturer m
                     JOIN product p ON p.manufacturer_id = m.id
                     JOIN product_profile_revision r ON r.product_id = p.id AND r.revision =
                         (SELECT MAX(revision) FROM product_profile_revision WHERE product_id = p.id)
                     ORDER BY m.created_at_utc, m.id""").fetchall()
-                matching = []
+                identities: dict[str, list[dict[str, Any]]] = {}
                 for entry in existing:
-                    saved = json.loads(entry["payload_json"])
-                    if ((saved["manufacturer_name"].casefold(), saved.get("manufacturer_country")) == identity
-                            and (not saved.get("manufacturer_legal_id")
-                                 or not payload.get("manufacturer_legal_id")
-                                 or saved["manufacturer_legal_id"] == payload["manufacturer_legal_id"])):
-                        matching.append(entry)
-                manufacturer_id = matching[0]["id"] if matching else f"M-{uuid4()}"
-                if not matching:
+                    identities.setdefault(entry["id"], []).append(json.loads(entry["payload_json"]))
+                country = payload.get("manufacturer_country")
+                legal_id = payload.get("manufacturer_legal_id")
+                legal_owners = [mid for mid, records in identities.items() if any(
+                    saved.get("manufacturer_country") == country
+                    and saved.get("manufacturer_legal_id") == legal_id for saved in records)] if legal_id else []
+                if manufacturer_id is not None:
+                    if manufacturer_id not in identities:
+                        raise ValueError("Selected manufacturer has no existing product profile")
+                    records = identities[manufacturer_id]
+                    if (not any(saved.get("manufacturer_country") in (None, "", country)
+                                and _name_key(saved["manufacturer_name"]) ==
+                                _name_key(payload["manufacturer_name"]) for saved in records)
+                            or any(saved.get("manufacturer_legal_id") not in (None, "", legal_id)
+                                   for saved in records)):
+                        raise ValueError("Selected manufacturer identity conflicts with the profile")
+                    if any(mid != manufacturer_id for mid in legal_owners):
+                        raise ValueError("Legal ID belongs to a different manufacturer")
+                elif legal_id:
+                    if len(legal_owners) > 1:
+                        raise ValueError("Legal ID belongs to multiple manufacturer rows; review required")
+                    manufacturer_id = legal_owners[0] if legal_owners else None
+                    if manufacturer_id is not None and any(
+                            saved.get("manufacturer_legal_id") not in (None, "", legal_id)
+                            for saved in identities[manufacturer_id]):
+                        raise ValueError("Manufacturer row has conflicting legal IDs; review required")
+                else:
+                    name_matches = [mid for mid, records in identities.items() if any(
+                        saved.get("manufacturer_country") in (None, "", country)
+                        and _name_key(saved["manufacturer_name"]) ==
+                        _name_key(payload["manufacturer_name"]) for saved in records)]
+                    if name_matches:
+                        raise ValueError("Name-only manufacturer match needs an explicit manufacturer_id or legal ID")
+                if manufacturer_id is None:
+                    manufacturer_id = f"M-{uuid4()}"
                     db.execute("INSERT INTO manufacturer (id, name, created_at_utc) VALUES (?, ?, ?)",
                                (manufacturer_id, payload["manufacturer_name"], now))
                 db.execute("""INSERT INTO product
@@ -176,15 +208,36 @@ class ProductProfiles:
                     (product_id, manufacturer_id, payload["product_name"],
                      payload.get("unit") or "UNSPECIFIED", self.store.scope.hs6, now, now))
             else:
+                if manufacturer_id is not None:
+                    raise ValueError("An existing product cannot change manufacturer_id")
                 previous = db.execute("""SELECT payload_json FROM product_profile_revision
                     WHERE product_id = ? AND revision = ?""", (product_id, current)).fetchone()
                 old = json.loads(previous["payload_json"])
-                if (old["manufacturer_name"].casefold() != payload["manufacturer_name"].casefold()
+                if (_name_key(old["manufacturer_name"]) != _name_key(payload["manufacturer_name"])
                         or (old.get("manufacturer_country") and old["manufacturer_country"] !=
                             payload.get("manufacturer_country"))
                         or (old.get("manufacturer_legal_id") and old["manufacturer_legal_id"] !=
                             payload.get("manufacturer_legal_id"))):
                     raise ValueError("Manufacturer identity cannot change on an existing product")
+                shared_id = db.execute("SELECT manufacturer_id FROM product WHERE id = ?",
+                                       (product_id,)).fetchone()["manufacturer_id"]
+                for other in db.execute("""SELECT r.payload_json FROM product p
+                    JOIN product_profile_revision r ON r.product_id = p.id AND r.revision =
+                        (SELECT MAX(revision) FROM product_profile_revision WHERE product_id = p.id)
+                    WHERE p.manufacturer_id = ? AND p.id != ?""", (shared_id, product_id)):
+                    saved = json.loads(other["payload_json"])
+                    if (saved.get("manufacturer_legal_id") and payload.get("manufacturer_legal_id")
+                            and saved["manufacturer_legal_id"] != payload["manufacturer_legal_id"]):
+                        raise ValueError("Manufacturer legal ID conflicts with another product")
+                if payload.get("manufacturer_legal_id"):
+                    for other in db.execute("""SELECT p.manufacturer_id, r.payload_json FROM product p
+                        JOIN product_profile_revision r ON r.product_id = p.id AND r.revision =
+                            (SELECT MAX(revision) FROM product_profile_revision WHERE product_id = p.id)
+                        WHERE p.manufacturer_id != ?""", (shared_id,)):
+                        saved = json.loads(other["payload_json"])
+                        if (saved.get("manufacturer_country") == payload.get("manufacturer_country")
+                                and saved.get("manufacturer_legal_id") == payload["manufacturer_legal_id"]):
+                            raise ValueError("Legal ID belongs to a different manufacturer")
                 db.execute("""UPDATE product SET classification_status = 'REVIEW_REQUIRED',
                     updated_at_utc = ? WHERE id = ?""", (now, product_id))
             revision = current + 1
@@ -215,6 +268,8 @@ class ProductProfiles:
                         and _approval_valid(db, payload))
             return {
                 "product_id": product_id, "revision": row["revision"], "profile": payload,
+                "manufacturer_id": db.execute("SELECT manufacturer_id FROM product WHERE id = ?",
+                                              (product_id,)).fetchone()["manufacturer_id"],
                 "payload_sha256": row["payload_sha256"], "created_by": row["actor_id"],
                 "created_at_utc": row["created_at_utc"],
                 "approved": approved,
