@@ -17,9 +17,11 @@ class Role(StrEnum):
 PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.VIEWER: frozenset({"READ_SUMMARY"}),
     Role.OPERATOR: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
-                              "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION"}),
+                              "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION",
+                              "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE"}),
     Role.ADMIN: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
-                           "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION", "BACKUP"}),
+                           "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION", "BACKUP",
+                           "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE"}),
     Role.SERVICE: frozenset({"READ_SUMMARY"}),
 }
 

@@ -36,4 +36,4 @@ The last command prints only synthetic draft outputs. To test SQLite persistence
 
 ## Planning
 
-[GitHub Project](https://github.com/users/ErenKoc5806/projects/1) tracks Foundation, Find, Sell, Execute, orchestration, production readiness, pilot and commercial milestones. Target: controlled pilot in February–April 2027; first customer and company setup by July 2027. [Contributing guide](CONTRIBUTING.md) covers the solo branch, PR and submodule workflow.
+[GitHub Project](https://github.com/users/ErenKoc5806/projects/1) tracks Foundation, Find, Sell, Execute, orchestration, production readiness, pilot and commercial milestones. Target: controlled pilot in February–April 2027; first customer and company setup by July 2027. [Contributing guide](CONTRIBUTING.md) covers the solo branch, PR and submodule workflow. [Find product profile](docs/find/product-profile.md) documents the first versioned manufacturer input and its approval boundary.
