@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import re
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from pilot_engine.candidates import _text, _url
+from pilot_engine.candidates import _domain, _text, _url
 from pilot_engine.market_signals import _utc
 from pilot_engine.qualification import _current_status
 from pilot_engine.store import PilotStore, _utc_now
@@ -18,6 +18,17 @@ KINDS = frozenset({"GENERIC_EMAIL", "SWITCHBOARD", "CONTACT_FORM", "NAMED_EMAIL"
 BASES = frozenset({"CONSENT", "LEGITIMATE_INTEREST", "OTHER_REVIEWED"})
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE = re.compile(r"^\+[1-9]\d{6,14}$")
+CHECK_METHODS = frozenset({"MANUAL_PAGE", "MANUAL_CALL", "PROVIDER_FEEDBACK"})
+CHECK_RESULTS = frozenset({"ROUTE_CONFIRMED", "UNCERTAIN", "INVALID", "BOUNCED"})
+FRESHNESS_DAYS = 90
+
+
+def _observation_hash(db: object, route_id: str) -> str:
+    observed = [row[0] for row in db.execute(
+        "SELECT id FROM contact_route_observation WHERE route_id = ? ORDER BY rowid", (route_id,))]
+    corrections = [row[0] for row in db.execute(
+        "SELECT id FROM contact_route_correction WHERE route_id = ? ORDER BY rowid", (route_id,))]
+    return hashlib.sha256(repr((observed, corrections)).encode("utf-8")).hexdigest()
 
 
 def _route_value(kind: str, value: str) -> tuple[str, str]:
@@ -193,6 +204,68 @@ class ContactRoutes:
                 person_name = NULL, person_role = NULL, source_url = NULL, suppressed = 1
                 WHERE value_key = ?""", (key,))
 
+    def check(
+        self, route_id: str, *, method: str, result: str,
+        source_url: str, checked_at_utc: str, explanation: str,
+        domain_review_ref: str | None = None,
+    ) -> int:
+        actor = self.store._require_access("VERIFY_DISCOVERED_CONTACT", route_id)
+        if method not in CHECK_METHODS or result not in CHECK_RESULTS:
+            raise ValueError("Invalid route check method or result")
+        _url(source_url)
+        _text(explanation, "Check explanation")
+        checked = _utc(checked_at_utc)
+        if datetime.fromisoformat(checked) > datetime.now(timezone.utc):
+            raise ValueError("Check time cannot be in the future")
+        if domain_review_ref is not None:
+            _text(domain_review_ref, "Domain review reference")
+        with self.store._transaction() as db:
+            route = db.execute("SELECT * FROM discovered_contact_route WHERE id = ?",
+                               (route_id,)).fetchone()
+            if route is None or route["suppressed"]:
+                raise ValueError("Active contact route is required")
+            observed = db.execute("""SELECT * FROM contact_route_observation
+                WHERE route_id = ? AND source_url = ? ORDER BY rowid DESC LIMIT 1""",
+                (route_id, source_url)).fetchone()
+            if observed is None:
+                raise ValueError("Check must cite a recorded source URL")
+            if datetime.fromisoformat(checked) < datetime.fromisoformat(observed["observed_at_utc"]):
+                raise ValueError("Check cannot predate its source observation")
+            if result == "ROUTE_CONFIRMED":
+                if method == "PROVIDER_FEEDBACK":
+                    raise ValueError("Provider feedback alone does not confirm a route")
+                if _current_status(db, route["product_id"], route["candidate_id"])["status"] != "QUALIFIED":
+                    raise ValueError("Current buyer fit is required for confirmation")
+                source_policy = db.execute("""SELECT * FROM contact_collection_policy
+                    WHERE source_system = ? AND source_ref = ? AND data_class = ?
+                    ORDER BY sequence DESC LIMIT 1""",
+                    (observed["source_system"], observed["source_ref"],
+                     "BUSINESS_ROUTE" if route["kind"] == "CONTACT_FORM" else "PERSONAL_ROUTE")).fetchone()
+                if (source_policy is None or source_policy["sequence"] != observed["policy_sequence"]
+                        or source_policy["decision"] != "ALLOW"
+                        or datetime.fromisoformat(source_policy["retention_until_utc"]) <=
+                        datetime.now(timezone.utc)):
+                    raise ValueError("Current source-use decision is required for confirmation")
+                company = db.execute("SELECT domain FROM buyer_candidate WHERE id = ?",
+                                     (route["candidate_id"],)).fetchone()
+                company_domain = company["domain"] if company else None
+                domains = [_domain(source_url)]
+                if route["kind"].endswith("EMAIL"):
+                    domains.append(route["route_value"].rsplit("@", 1)[1].rstrip(".").lower())
+                if (not company_domain or any(
+                        domain != company_domain and not domain.endswith("." + company_domain)
+                        for domain in domains)) and not domain_review_ref:
+                    raise ValueError("Company/source domain mismatch needs an explicit review reference")
+                if route["kind"].startswith("NAMED_") and not route["person_role"]:
+                    raise ValueError("Named contact role uncertainty needs review")
+            cursor = db.execute("""INSERT INTO contact_route_check
+                (route_id, observation_sha256, policy_sequence, method, result, source_url, checked_at_utc,
+                 explanation, domain_review_ref, actor_id, recorded_at_utc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (route_id, _observation_hash(db, route_id), observed["policy_sequence"], method, result, source_url,
+                 checked, explanation, domain_review_ref, actor, _utc_now()))
+            return cursor.lastrowid
+
     def read(self, route_id: str) -> dict[str, object] | None:
         self.store._require_access("READ_DISCOVERED_CONTACT", route_id)
         with closing(self.store._connect()) as db:
@@ -224,6 +297,24 @@ class ContactRoutes:
             result["status"] = ("SUPPRESSED" if row["suppressed"] else
                                 "RETENTION_EXPIRED" if expired else
                                 "REVIEW_REQUIRED" if source_blocked or fit_stale else "UNVERIFIED")
+            latest_check = db.execute("""SELECT * FROM contact_route_check
+                WHERE route_id = ? ORDER BY sequence DESC LIMIT 1""", (route_id,)).fetchone()
+            result["latest_check"] = dict(latest_check) if latest_check else None
+            if latest_check is not None and result["status"] == "UNVERIFIED":
+                if latest_check["result"] in ("BOUNCED", "INVALID"):
+                    result["status"] = latest_check["result"]
+                elif (latest_check["observation_sha256"] != _observation_hash(db, route_id)
+                      or datetime.now(timezone.utc) -
+                      datetime.fromisoformat(latest_check["checked_at_utc"]) >=
+                      timedelta(days=FRESHNESS_DAYS)
+                      or not db.execute("""SELECT 1 FROM contact_collection_policy p
+                          WHERE p.sequence = ? AND p.sequence = (SELECT MAX(q.sequence)
+                          FROM contact_collection_policy q WHERE q.source_system = p.source_system
+                          AND q.source_ref = p.source_ref AND q.data_class = p.data_class)
+                          AND p.decision = 'ALLOW'""", (latest_check["policy_sequence"],)).fetchone()):
+                    result["status"] = "REVIEW_REQUIRED"
+                elif latest_check["result"] == "ROUTE_CONFIRMED":
+                    result["status"] = "VERIFIED_ROUTE"
             result["source_use_status"] = ("EXPIRED" if expired else
                                            "REVOKED" if source_blocked else "REVIEWED_ALLOWED")
             if expired or row["suppressed"]:
@@ -233,6 +324,8 @@ class ContactRoutes:
                 result["source_url"] = None
                 for observation in result["observations"]:
                     observation["source_url"] = None
+                if result["latest_check"]:
+                    result["latest_check"]["source_url"] = None
             result["outreach_allowed"] = False
             return result
 

@@ -78,7 +78,7 @@ class ContactRouteTests(unittest.TestCase):
                                      "source_ref": "FORM-1"})
         self.assertEqual(form["status"], "UNVERIFIED")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 10)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
 
     def test_named_route_suppression_and_conflicting_evidence(self):
         self.qualify()
@@ -160,8 +160,83 @@ class ContactRouteTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             viewer.record(self.product_id, self.candidate_id, **self.kwargs)
 
+    def test_route_check_stales_on_new_evidence_and_bounce_blocks(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
+        check = dict(method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                     source_url="https://example.org/contact", checked_at_utc="2026-10-04T00:00:00Z",
+                     explanation="Operator compared route with invented company page")
+        self.routes.check(route["id"], **check)
+        self.assertEqual(self.routes.read(route["id"])["status"], "VERIFIED_ROUTE")
+        self.assertFalse(self.routes.read(route["id"])["outreach_allowed"])
+        self.policy(source_ref="CONTACT-2", source_url="https://example.org/about")
+        self.routes.record(self.product_id, self.candidate_id, **{
+            **self.kwargs, "source_ref": "CONTACT-2", "source_url": "https://example.org/about",
+            "observed_at_utc": "2026-10-04T01:00:00Z"})
+        self.assertEqual(self.routes.read(route["id"])["status"], "REVIEW_REQUIRED")
+        self.routes.check(route["id"], **{**check, "source_url": "https://example.org/about",
+                                           "checked_at_utc": "2026-10-04T01:00:00Z"})
+        self.assertEqual(self.routes.read(route["id"])["status"], "VERIFIED_ROUTE")
+        self.routes.check(route["id"], method="PROVIDER_FEEDBACK", result="BOUNCED",
+                          source_url="https://example.org/about", checked_at_utc="2026-10-04T02:00:00Z",
+                          explanation="Invented provider bounce in test")
+        self.assertEqual(self.routes.read(route["id"])["status"], "BOUNCED")
+        with closing(sqlite3.connect(self.path)) as db:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                db.execute("DELETE FROM contact_route_check")
+
+    def test_domain_mismatch_and_role_uncertainty_require_review(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id,
+                                   **{**self.kwargs, "value": "buyer@other.example"})
+        args = dict(method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                    source_url="https://example.org/contact", checked_at_utc="2026-10-04T00:00:00Z",
+                    explanation="External mailbox requires a documented company-domain review")
+        with self.assertRaisesRegex(ValueError, "domain mismatch"):
+            self.routes.check(route["id"], **args)
+        self.routes.check(route["id"], **{**args, "domain_review_ref": "SYNTHETIC-REVIEW"})
+        self.assertEqual(self.routes.read(route["id"])["status"], "VERIFIED_ROUTE")
+        named = self.routes.record(self.product_id, self.candidate_id,
+                                   **{**self.kwargs, "kind": "NAMED_EMAIL",
+                                      "value": "person@example.org", "person_name": "Example Person"})
+        with self.assertRaisesRegex(ValueError, "role uncertainty"):
+            self.routes.check(named["id"], **args)
+        with self.assertRaisesRegex(ValueError, "recorded source"):
+            self.routes.check(route["id"], **{**args, "source_url": "https://example.org/unknown"})
+
+    def test_policy_change_requires_new_observation_before_reverification(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
+        check = dict(method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                     source_url="https://example.org/contact", checked_at_utc="2026-10-04T00:00:00Z",
+                     explanation="Invented official page observation")
+        self.routes.check(route["id"], **check)
+        self.policy(decision="REVOKE")
+        self.assertEqual(self.routes.read(route["id"])["status"], "REVIEW_REQUIRED")
+        self.policy()
+        self.assertEqual(self.routes.read(route["id"])["status"], "REVIEW_REQUIRED")
+        with self.assertRaisesRegex(ValueError, "source-use"):
+            self.routes.check(route["id"], **check)
+
+    def test_old_check_and_check_before_observation_are_not_current(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **{
+            **self.kwargs, "observed_at_utc": "2025-01-01T00:00:00Z"})
+        check = dict(method="MANUAL_PAGE", result="ROUTE_CONFIRMED",
+                     source_url="https://example.org/contact", checked_at_utc="2025-01-02T00:00:00Z",
+                     explanation="Old invented observation")
+        with self.assertRaisesRegex(ValueError, "predate"):
+            self.routes.check(route["id"], **{**check, "checked_at_utc": "2024-12-31T00:00:00Z"})
+        self.routes.check(route["id"], **check)
+        self.assertEqual(self.routes.read(route["id"])["status"], "REVIEW_REQUIRED")
+
     def test_v9_upgrade_preserves_prior_profile_and_candidate(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TABLE contact_route_check")
             for table in ("contact_route_observation", "contact_route_correction",
                           "discovered_contact_route", "contact_route_absence",
                           "contact_suppression", "contact_collection_policy"):
@@ -171,7 +246,19 @@ class ContactRouteTests(unittest.TestCase):
         self.assertIsNotNone(ProductProfiles(reopened).read(self.product_id))
         self.assertIsNotNone(CandidateDiscovery(reopened).read(self.candidate_id))
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 10)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
+
+    def test_v10_upgrade_preserves_contact_route(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TABLE contact_route_check")
+            db.execute("PRAGMA user_version = 10")
+        reopened = ContactRoutes(PilotStore(self.path))
+        self.assertEqual(reopened.read(route["id"])["route_value"], "sales@example.org")
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 11)
 
 
 if __name__ == "__main__":

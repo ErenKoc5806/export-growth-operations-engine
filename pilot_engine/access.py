@@ -22,7 +22,8 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
                               "READ_MARKET", "RECORD_MARKET", "READ_CANDIDATE",
                               "RECORD_CANDIDATE", "QUALIFY_CANDIDATE",
                               "READ_DISCOVERED_CONTACT", "RECORD_DISCOVERED_CONTACT",
-                              "SUPPRESS_CONTACT", "CORRECT_DISCOVERED_CONTACT"}),
+                              "SUPPRESS_CONTACT", "CORRECT_DISCOVERED_CONTACT",
+                              "VERIFY_DISCOVERED_CONTACT"}),
     Role.ADMIN: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
                            "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION", "BACKUP",
                            "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE",
@@ -30,7 +31,7 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
                            "RECORD_CANDIDATE", "QUALIFY_CANDIDATE",
                            "READ_DISCOVERED_CONTACT", "RECORD_DISCOVERED_CONTACT",
                            "SUPPRESS_CONTACT", "CORRECT_DISCOVERED_CONTACT",
-                           "APPROVE_CONTACT_SOURCE"}),
+                           "APPROVE_CONTACT_SOURCE", "VERIFY_DISCOVERED_CONTACT"}),
     Role.SERVICE: frozenset({"READ_SUMMARY"}),
 }
 
