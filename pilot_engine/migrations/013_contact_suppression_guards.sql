@@ -32,7 +32,9 @@ WHEN NOT (
          AND NEW.route_value IS OLD.route_value AND NEW.source_url IS OLD.source_url
          AND NEW.last_correction_id IS NOT OLD.last_correction_id
          AND EXISTS (SELECT 1 FROM contact_route_correction c
-                     WHERE c.id = NEW.last_correction_id AND c.route_id = OLD.id))
+                     WHERE c.id = NEW.last_correction_id AND c.route_id = OLD.id)
+         AND NEW.last_correction_id = (SELECT c.id FROM contact_route_correction c
+                                       WHERE c.route_id = OLD.id ORDER BY c.rowid DESC LIMIT 1))
     )
 )
 BEGIN SELECT RAISE(ABORT, 'contact route mutation needs correction or redaction'); END;

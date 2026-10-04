@@ -95,6 +95,14 @@ class ContactRouteTests(unittest.TestCase):
             reason="Operator checked the source again")
         self.assertEqual(corrected["person_name"], "Another Person")
         self.assertEqual(len(corrected["corrections"]), 1)
+        self.routes.correct_identity(saved["id"], person_name="Another Person",
+                                     person_role="Purchasing", reason="Second review confirmed identity")
+        with closing(sqlite3.connect(self.path)) as db:
+            first_event = db.execute("""SELECT id FROM contact_route_correction
+                WHERE route_id = ? ORDER BY rowid LIMIT 1""", (saved["id"],)).fetchone()[0]
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "mutation needs correction"):
+                db.execute("""UPDATE discovered_contact_route SET person_name = 'Forged',
+                    last_correction_id = ? WHERE id = ?""", (first_event, saved["id"]))
         self.policy(source_ref="CONTACT-2", source_url="https://example.org/team",
                     data_class="PERSONAL_ROUTE")
         updated = self.routes.record(self.product_id, self.candidate_id, **{
