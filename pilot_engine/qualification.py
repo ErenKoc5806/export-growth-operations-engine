@@ -20,6 +20,33 @@ def _hash_ids(ids: list[str]) -> str:
     return hashlib.sha256(_json(sorted(ids)).encode("utf-8")).hexdigest()
 
 
+def _current_status(db: Any, product_id: str, candidate_id: str) -> dict[str, Any]:
+    latest = db.execute("""SELECT * FROM buyer_fit_decision
+        WHERE product_id = ? AND candidate_id = ? ORDER BY sequence DESC LIMIT 1""",
+        (product_id, candidate_id)).fetchone()
+    if latest is None:
+        return {"status": "UNQUALIFIED", "outreach_allowed": False}
+    result = dict(latest)
+    result["checks"] = json.loads(result.pop("checks_json"))
+    current = db.execute("""SELECT revision, payload_sha256, payload_json FROM product_profile_revision
+        WHERE product_id = ? ORDER BY revision DESC LIMIT 1""", (product_id,)).fetchone()
+    evidence_ids = [row[0] for row in db.execute("""SELECT id FROM buyer_candidate_evidence
+        WHERE candidate_id = ?""", (candidate_id,))]
+    approval = db.execute("""SELECT action FROM product_profile_event
+        WHERE product_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
+        (product_id, result["profile_revision"])).fetchone()
+    stale = (current is None or current["revision"] != result["profile_revision"]
+             or current["payload_sha256"] != result["profile_sha256"]
+             or _hash_ids(evidence_ids) != result["evidence_sha256"]
+             or (result["outcome"] == "ACCEPT" and
+                 (approval is None or approval["action"] != "APPROVED"
+                  or not _approval_valid(db, json.loads(current["payload_json"])))))
+    result["status"] = ("REVIEW_REQUIRED" if stale else
+                        "QUALIFIED" if result["outcome"] == "ACCEPT" else result["outcome"])
+    result["outreach_allowed"] = False
+    return result
+
+
 class BuyerQualification:
     """A recorded review, not automatic evidence of intent to buy."""
 
@@ -75,28 +102,4 @@ class BuyerQualification:
     def status(self, product_id: str, candidate_id: str) -> dict[str, Any]:
         self.store._require_access("READ_CANDIDATE", candidate_id)
         with closing(self.store._connect()) as db:
-            latest = db.execute("""SELECT * FROM buyer_fit_decision
-                WHERE product_id = ? AND candidate_id = ? ORDER BY sequence DESC LIMIT 1""",
-                (product_id, candidate_id)).fetchone()
-            if latest is None:
-                return {"status": "UNQUALIFIED", "outreach_allowed": False}
-            result = dict(latest)
-            result["checks"] = json.loads(result.pop("checks_json"))
-            current = db.execute("""SELECT revision, payload_sha256, payload_json FROM product_profile_revision
-                WHERE product_id = ? ORDER BY revision DESC LIMIT 1""", (product_id,)).fetchone()
-            evidence_ids = [row[0] for row in db.execute("""SELECT id FROM buyer_candidate_evidence
-                WHERE candidate_id = ?""", (candidate_id,))]
-            approval = db.execute("""SELECT action FROM product_profile_event
-                WHERE product_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
-                (product_id, result["profile_revision"])).fetchone()
-            stale = (current is None or current["revision"] != result["profile_revision"]
-                     or current["payload_sha256"] != result["profile_sha256"]
-                     or _hash_ids(evidence_ids) != result["evidence_sha256"]
-                     or (result["outcome"] == "ACCEPT" and
-                         (approval is None or approval["action"] != "APPROVED"
-                          or not _approval_valid(db, json.loads(current["payload_json"])))))
-            result["status"] = ("REVIEW_REQUIRED" if stale else
-                                "QUALIFIED" if result["outcome"] == "ACCEPT" else result["outcome"])
-            # Qualification alone never authorizes a contact or external message.
-            result["outreach_allowed"] = False
-            return result
+            return _current_status(db, product_id, candidate_id)
