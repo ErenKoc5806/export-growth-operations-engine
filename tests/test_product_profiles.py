@@ -126,7 +126,13 @@ class ProductProfileTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             viewer.read(product_id)
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
+            db.execute("DROP TRIGGER candidate_evidence_no_update")
+            db.execute("DROP TRIGGER candidate_evidence_no_delete")
+            db.execute("DROP TRIGGER candidate_no_delete")
+            db.execute("DROP TABLE buyer_candidate_alias")
+            db.execute("DROP TABLE buyer_candidate_evidence")
+            db.execute("DROP TABLE buyer_candidate")
             db.execute("DROP TRIGGER market_signal_no_update")
             db.execute("DROP TRIGGER market_signal_no_delete")
             db.execute("DROP TABLE market_signal_snapshot")
@@ -141,7 +147,7 @@ class ProductProfileTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 4")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
 
 
 if __name__ == "__main__":
