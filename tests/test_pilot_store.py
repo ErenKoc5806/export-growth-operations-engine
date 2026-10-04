@@ -158,7 +158,7 @@ class PilotStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "destination must differ"):
             store.backup_to(self.path)
 
-    def test_v1_schema_is_upgraded_to_v7(self):
+    def test_v1_schema_is_upgraded_to_v8(self):
         migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
         with closing(sqlite3.connect(self.path)) as db, db:
             db.executescript(migration.read_text(encoding="utf-8"))
@@ -167,7 +167,7 @@ class PilotStoreTests(unittest.TestCase):
         store = PilotStore(self.path)
         store.save_synthetic_case(self.case)
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
 
     def test_v1_upgrade_rejects_existing_invalid_quote(self):
         migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
@@ -193,6 +193,9 @@ class PilotStoreTests(unittest.TestCase):
         oid = self.case["opportunity_id"]
         store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER buyer_fit_no_update")
+            db.execute("DROP TRIGGER buyer_fit_no_delete")
+            db.execute("DROP TABLE buyer_fit_decision")
             db.execute("DROP TRIGGER candidate_evidence_no_update")
             db.execute("DROP TRIGGER candidate_evidence_no_delete")
             db.execute("DROP TRIGGER candidate_no_delete")
@@ -223,7 +226,7 @@ class PilotStoreTests(unittest.TestCase):
             results = list(pool.map(open_after_barrier, range(4)))
         self.assertTrue(all(result["id"] == oid for result in results))
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM approval").fetchone()[0], 1)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "approvals are append-only"):
                 db.execute("DELETE FROM approval")
