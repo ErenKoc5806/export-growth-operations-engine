@@ -135,7 +135,7 @@ class CandidateDiscovery:
             result["aliases"] = [entry[0] for entry in db.execute(
                 "SELECT alias FROM buyer_candidate_alias WHERE candidate_id = ? ORDER BY alias",
                 (candidate_id,))]
-            result["evidence"] = [dict(entry) for entry in db.execute("""SELECT source_system,
+            result["evidence"] = [dict(entry) for entry in db.execute("""SELECT id, source_system,
                 source_ref, source_url, observed_name, observed_website, role_hint,
                 observed_at_utc, query_text, summary
                 FROM buyer_candidate_evidence WHERE candidate_id = ? ORDER BY created_at_utc, id""",

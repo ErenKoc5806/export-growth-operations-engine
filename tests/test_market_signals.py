@@ -102,6 +102,9 @@ class MarketSignalTests(unittest.TestCase):
                 year=2024, source_url="https://example.org", observed_at_utc="2026-10-04T00:00:00Z",
                 trade_value_usd=None, description="No data", source_note="Source checked")
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER buyer_fit_no_update")
+            db.execute("DROP TRIGGER buyer_fit_no_delete")
+            db.execute("DROP TABLE buyer_fit_decision")
             db.execute("DROP TRIGGER candidate_evidence_no_update")
             db.execute("DROP TRIGGER candidate_evidence_no_delete")
             db.execute("DROP TRIGGER candidate_no_delete")
@@ -114,7 +117,7 @@ class MarketSignalTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 5")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
 
 
 if __name__ == "__main__":
