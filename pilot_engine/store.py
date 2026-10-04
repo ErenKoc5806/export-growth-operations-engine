@@ -24,6 +24,7 @@ MIGRATION_FILES = (
     "006_market_signal.sql", "007_buyer_candidate.sql",
     "008_buyer_qualification.sql", "009_profile_documents.sql",
     "010_contact_routes.sql", "011_contact_verification.sql", "012_find_handoff.sql",
+    "013_contact_suppression_guards.sql",
 )
 
 

@@ -6,6 +6,7 @@ import hashlib
 import re
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from pilot_engine.candidates import _domain, _text, _url
@@ -21,6 +22,42 @@ PHONE = re.compile(r"^\+[1-9]\d{6,14}$")
 CHECK_METHODS = frozenset({"MANUAL_PAGE", "MANUAL_CALL", "PROVIDER_FEEDBACK"})
 CHECK_RESULTS = frozenset({"ROUTE_CONFIRMED", "UNCERTAIN", "INVALID", "BOUNCED"})
 FRESHNESS_DAYS = 90
+DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _mailbox_base(value: str) -> str:
+    local, domain = value.casefold().rsplit("@", 1)
+    return f"{local.split('+', 1)[0]}@{domain.rstrip('.')}"
+
+
+def _form_location(value: str) -> str:
+    parsed = urlsplit(value)
+    return urlunsplit(("https", (parsed.hostname or "").rstrip(".").lower(),
+                       parsed.path.rstrip("/") or "/", "", ""))
+
+
+def _company_domains(value: str | None) -> list[str]:
+    if not value:
+        return []
+    labels = value.lower().rstrip(".").split(".")
+    return [".".join(labels[index:]) for index in range(len(labels) - 1)]
+
+
+def _suppressed(db: object, kind: str, value: str, key: str,
+                company_domain: str | None) -> bool:
+    if db.execute("SELECT 1 FROM contact_suppression WHERE value_key = ?", (key,)).fetchone():
+        return True
+    if kind.endswith("EMAIL") and db.execute("""SELECT 1 FROM contact_suppression_rule
+        WHERE scope = 'MAILBOX_BASE' AND value_key = ?""",
+        (_digest(_mailbox_base(value)),)).fetchone():
+        return True
+    return any(db.execute("""SELECT 1 FROM contact_suppression_rule
+        WHERE scope = 'COMPANY_DOMAIN' AND value_key = ?""",
+        (_digest(domain),)).fetchone() for domain in _company_domains(company_domain))
 
 
 def _observation_hash(db: object, route_id: str) -> str:
@@ -78,7 +115,11 @@ def _route_value(kind: str, value: str) -> tuple[str, str]:
         normalized, channel = value, "PHONE"
     else:
         _url(value)
-        normalized, channel = value.rstrip("/"), "FORM"
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        path = parsed.path.rstrip("/") or "/"
+        normalized = urlunsplit(("https", host, path, parsed.query, ""))
+        channel = "FORM"
     key = hashlib.sha256(f"{channel}:{normalized}".encode("utf-8")).hexdigest()
     return normalized, key
 
@@ -147,13 +188,15 @@ class ContactRoutes:
         with self.store._transaction() as db:
             if _current_status(db, product_id, candidate_id)["status"] != "QUALIFIED":
                 raise ValueError("Current qualified company/product fit is required")
+            candidate = db.execute("SELECT domain FROM buyer_candidate WHERE id = ?",
+                                   (candidate_id,)).fetchone()
             policy = db.execute("""SELECT * FROM contact_collection_policy
                 WHERE source_system = ? AND source_ref = ? AND data_class = ?
                 ORDER BY sequence DESC LIMIT 1""", (source_system, source_ref, data_class)).fetchone()
             if (policy is None or policy["decision"] != "ALLOW" or policy["source_url"] != source_url
                     or datetime.fromisoformat(policy["retention_until_utc"]) <= datetime.now(timezone.utc)):
                 raise ValueError("A current approved collection and source-terms review is required")
-            if db.execute("SELECT 1 FROM contact_suppression WHERE value_key = ?", (key,)).fetchone():
+            if _suppressed(db, kind, value, key, candidate["domain"] if candidate else None):
                 raise ValueError("Contact route is suppressed")
             existing = db.execute("""SELECT * FROM discovered_contact_route WHERE candidate_id = ?
                 AND kind = ? AND value_key = ?""", (candidate_id, kind, key)).fetchone()
@@ -180,7 +223,10 @@ class ContactRoutes:
             if prior is not None and prior["observed_at_utc"] != observed:
                 raise ValueError("Source reference changed; record a new source observation")
             if prior is None:
-                db.execute("""INSERT INTO contact_route_observation VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                db.execute("""INSERT INTO contact_route_observation
+                    (id, route_id, source_system, source_ref, source_url, observed_at_utc,
+                     policy_sequence, actor_id, recorded_at_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                            (f"CO-{uuid4()}", route_id, source_system, source_ref,
                             source_url, observed, policy["sequence"], actor, _utc_now()))
         return self.read(route_id)
@@ -197,10 +243,13 @@ class ContactRoutes:
             row = db.execute("SELECT * FROM discovered_contact_route WHERE id = ?", (route_id,)).fetchone()
             if row is None or row["suppressed"] or not row["kind"].startswith("NAMED_"):
                 raise ValueError("Only an active named route can be corrected")
-            db.execute("""UPDATE discovered_contact_route SET person_name = ?, person_role = ?
-                WHERE id = ?""", (person_name, person_role, route_id))
-            db.execute("""INSERT INTO contact_route_correction VALUES (?, ?, ?, ?, ?)""",
-                       (f"CC-{uuid4()}", route_id, reason, actor, _utc_now()))
+            correction_id = f"CC-{uuid4()}"
+            db.execute("""INSERT INTO contact_route_correction
+                (id, route_id, reason, actor_id, corrected_at_utc)
+                VALUES (?, ?, ?, ?, ?)""",
+                       (correction_id, route_id, reason, actor, _utc_now()))
+            db.execute("""UPDATE discovered_contact_route SET person_name = ?, person_role = ?,
+                last_correction_id = ? WHERE id = ?""", (person_name, person_role, correction_id, route_id))
         return self.read(route_id)
 
     def record_missing(
@@ -222,7 +271,10 @@ class ContactRoutes:
                     raise ValueError("Missing-route observation conflicts with its prior record")
                 return prior["id"]
             record_id = f"CM-{uuid4()}"
-            db.execute("""INSERT INTO contact_route_absence VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            db.execute("""INSERT INTO contact_route_absence
+                (id, product_id, candidate_id, source_url, observed_at_utc,
+                 explanation, actor_id, recorded_at_utc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                        (record_id, product_id, candidate_id, source_url,
                         observed, explanation, actor, _utc_now()))
         return record_id
@@ -232,11 +284,44 @@ class ContactRoutes:
         _, key = _route_value(kind, value)
         _text(reason, "Suppression reason")
         with self.store._transaction() as db:
-            db.execute("""INSERT OR IGNORE INTO contact_suppression VALUES (?, ?, ?, ?)""",
+            db.execute("""INSERT OR IGNORE INTO contact_suppression
+                (value_key, reason, actor_id, recorded_at_utc) VALUES (?, ?, ?, ?)""",
                        (key, reason, actor, _utc_now()))
-            db.execute("""UPDATE discovered_contact_route SET route_value = NULL,
-                person_name = NULL, person_role = NULL, source_url = NULL, suppressed = 1
-                WHERE value_key = ?""", (key,))
+            if kind.endswith("EMAIL"):
+                db.execute("""INSERT OR IGNORE INTO contact_suppression_rule
+                    (scope, value_key, reason, actor_id, recorded_at_utc)
+                    VALUES ('MAILBOX_BASE', ?, ?, ?, ?)""",
+                    (_digest(_mailbox_base(value)), reason, actor, _utc_now()))
+            routes = db.execute("""SELECT id, kind, route_value, value_key FROM discovered_contact_route
+                WHERE suppressed = 0""").fetchall()
+            for route in routes:
+                if (route["value_key"] == key or (kind.endswith("EMAIL")
+                        and route["kind"].endswith("EMAIL")
+                        and _mailbox_base(route["route_value"]) == _mailbox_base(value))):
+                    db.execute("""UPDATE discovered_contact_route SET route_value = NULL,
+                        person_name = NULL, person_role = NULL, source_url = NULL, suppressed = 1
+                        WHERE id = ?""", (route["id"],))
+
+    def suppress_domain(self, domain: str, reason: str) -> None:
+        actor = self.store._require_access("SUPPRESS_CONTACT", "company-domain")
+        if not isinstance(domain, str) or domain != domain.strip():
+            raise ValueError("Company domain is required")
+        domain = domain.lower().rstrip(".")
+        if not DOMAIN.fullmatch(domain):
+            raise ValueError("Invalid company domain")
+        _text(reason, "Suppression reason")
+        with self.store._transaction() as db:
+            db.execute("""INSERT OR IGNORE INTO contact_suppression_rule
+                (scope, value_key, reason, actor_id, recorded_at_utc)
+                VALUES ('COMPANY_DOMAIN', ?, ?, ?, ?)""",
+                (_digest(domain), reason, actor, _utc_now()))
+            routes = db.execute("""SELECT r.id, c.domain FROM discovered_contact_route r
+                JOIN buyer_candidate c ON c.id = r.candidate_id WHERE r.suppressed = 0""").fetchall()
+            for route in routes:
+                if domain in _company_domains(route["domain"]):
+                    db.execute("""UPDATE discovered_contact_route SET route_value = NULL,
+                        person_name = NULL, person_role = NULL, source_url = NULL, suppressed = 1
+                        WHERE id = ?""", (route["id"],))
 
     def check(
         self, route_id: str, *, method: str, result: str,
@@ -312,9 +397,13 @@ class ContactRoutes:
                 source_ref, source_url, observed_at_utc, policy_sequence, recorded_at_utc
                 FROM contact_route_observation
                 WHERE route_id = ? ORDER BY rowid""", (route_id,))]
-            result["possible_duplicates"] = [item["id"] for item in db.execute("""SELECT id
-                FROM discovered_contact_route WHERE candidate_id = ? AND value_key = ? AND id != ?""",
-                (row["candidate_id"], row["value_key"], route_id))]
+            result["possible_duplicates"] = [item["id"] for item in db.execute("""SELECT id,
+                kind, route_value, value_key FROM discovered_contact_route
+                WHERE candidate_id = ? AND id != ?""", (row["candidate_id"], route_id))
+                if item["value_key"] == row["value_key"] or
+                (row["kind"] == "CONTACT_FORM" and item["kind"] == "CONTACT_FORM"
+                 and row["route_value"] and item["route_value"]
+                 and _form_location(item["route_value"]) == _form_location(row["route_value"]))]
             result["corrections"] = [dict(item) for item in db.execute("""SELECT reason, actor_id,
                 corrected_at_utc FROM contact_route_correction WHERE route_id = ?
                 ORDER BY rowid""", (route_id,))]
