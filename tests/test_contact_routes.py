@@ -79,7 +79,7 @@ class ContactRouteTests(unittest.TestCase):
                                      "source_ref": "FORM-1"})
         self.assertEqual(form["status"], "UNVERIFIED")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 13)
 
     def test_named_route_suppression_and_conflicting_evidence(self):
         self.qualify()
@@ -116,6 +116,65 @@ class ContactRouteTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db:
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("DELETE FROM contact_suppression")
+
+    def test_plus_alias_and_company_domain_suppression(self):
+        self.qualify()
+        self.policy()
+        base = self.routes.record(self.product_id, self.candidate_id,
+                                  **{**self.kwargs, "value": "buyer@example.org"})
+        alias = self.routes.record(self.product_id, self.candidate_id,
+                                   **{**self.kwargs, "value": "buyer+trade@example.org"})
+        self.routes.suppress("GENERIC_EMAIL", "buyer+trade@example.org", "Synthetic opt-out")
+        self.assertEqual(self.routes.read(base["id"])["status"], "SUPPRESSED")
+        self.assertEqual(self.routes.read(alias["id"])["status"], "SUPPRESSED")
+        with self.assertRaisesRegex(ValueError, "suppressed"):
+            self.routes.record(self.product_id, self.candidate_id,
+                               **{**self.kwargs, "value": "buyer+new@example.org"})
+        other = self.routes.record(self.product_id, self.candidate_id,
+                                   **{**self.kwargs, "value": "office@example.org"})
+        self.routes.suppress_domain("example.org", "Company-wide synthetic opt-out")
+        self.assertEqual(self.routes.read(other["id"])["status"], "SUPPRESSED")
+        with self.assertRaisesRegex(ValueError, "suppressed"):
+            self.routes.record(self.product_id, self.candidate_id,
+                               **{**self.kwargs, "value": "new@example.org"})
+        sub = self.candidates.record(
+            source_system="EXAMPLE_SITE", source_ref="SUB-CANDIDATE", query="example shop",
+            observed_at_utc="2026-10-04T01:00:00Z", name="Example Sub Shop",
+            country_code="DE", role_hypothesis="DISTRIBUTOR",
+            website="https://shop.example.org", evidence_urls=["https://shop.example.org/products"],
+            summary="Invented separate subdomain company candidate")
+        BuyerQualification(self.store).decide(
+            self.product_id, sub["id"], 1, outcome="ACCEPT",
+            checks={"product_spec": "CONFIRMED", "buyer_role": "CONFIRMED", "corridor": "CONFIRMED"},
+            cited_evidence_ids=[sub["evidence"][0]["id"]],
+            explanation="Invented product and subdomain company reviewed in synthetic test")
+        with self.assertRaisesRegex(ValueError, "suppressed"):
+            self.routes.record(self.product_id, sub["id"],
+                               **{**self.kwargs, "value": "new@shop.example.org"})
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM contact_suppression_rule").fetchone()[0], 2)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                db.execute("DELETE FROM contact_suppression_rule")
+
+    def test_form_normalization_and_direct_sql_mutation_guard(self):
+        self.qualify()
+        self.policy(source_ref="FORM-1", data_class="BUSINESS_ROUTE")
+        form = dict(self.kwargs, source_ref="FORM-1", kind="CONTACT_FORM",
+                    value="https://EXAMPLE.ORG/contact/form/")
+        first = self.routes.record(self.product_id, self.candidate_id, **form)
+        second = self.routes.record(self.product_id, self.candidate_id,
+                                    **{**form, "value": "https://example.org/contact/form"})
+        self.assertEqual(first["id"], second["id"])
+        variant = self.routes.record(self.product_id, self.candidate_id,
+                                     **{**form, "value": "https://example.org/contact/form?ref=trade"})
+        self.assertIn(first["id"], variant["possible_duplicates"])
+        with closing(sqlite3.connect(self.path)) as db:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "mutation needs correction"):
+                db.execute("UPDATE discovered_contact_route SET route_value = 'https://evil.example' WHERE id = ?",
+                           (first["id"],))
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "mutation needs correction"):
+                db.execute("UPDATE discovered_contact_route SET source_ref = 'forged' WHERE id = ?",
+                           (first["id"],))
 
     def test_revoke_expire_and_stale_fit_fail_closed(self):
         self.qualify()
@@ -237,6 +296,7 @@ class ContactRouteTests(unittest.TestCase):
 
     def test_v9_upgrade_preserves_prior_profile_and_candidate(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TABLE contact_suppression_rule")
             db.execute("DROP TABLE find_handoff_revision")
             db.execute("DROP TABLE find_handoff")
             db.execute("DROP TABLE contact_route_check")
@@ -249,13 +309,16 @@ class ContactRouteTests(unittest.TestCase):
         self.assertIsNotNone(ProductProfiles(reopened).read(self.product_id))
         self.assertIsNotNone(CandidateDiscovery(reopened).read(self.candidate_id))
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 13)
 
     def test_v10_upgrade_preserves_contact_route(self):
         self.qualify()
         self.policy()
         route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER contact_route_guard_update")
+            db.execute("ALTER TABLE discovered_contact_route DROP COLUMN last_correction_id")
+            db.execute("DROP TABLE contact_suppression_rule")
             db.execute("DROP TABLE find_handoff_revision")
             db.execute("DROP TABLE find_handoff")
             db.execute("DROP TABLE contact_route_check")
@@ -263,7 +326,7 @@ class ContactRouteTests(unittest.TestCase):
         reopened = ContactRoutes(PilotStore(self.path))
         self.assertEqual(reopened.read(route["id"])["route_value"], "sales@example.org")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 13)
 
     def test_handoff_versions_current_evidence_without_duplicate_identity(self):
         self.qualify()
@@ -313,13 +376,33 @@ class ContactRouteTests(unittest.TestCase):
                           source_url="https://example.org/contact", checked_at_utc="2026-10-04T00:00:00Z",
                           explanation="Synthetic route on company page")
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER contact_route_guard_update")
+            db.execute("ALTER TABLE discovered_contact_route DROP COLUMN last_correction_id")
+            db.execute("DROP TABLE contact_suppression_rule")
             db.execute("DROP TABLE find_handoff_revision")
             db.execute("DROP TABLE find_handoff")
             db.execute("PRAGMA user_version = 11")
         reopened = ContactRoutes(PilotStore(self.path))
         self.assertEqual(reopened.read(route["id"])["status"], "VERIFIED_ROUTE")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 13)
+
+    def test_v12_upgrade_preserves_route_and_installs_mutation_guard(self):
+        self.qualify()
+        self.policy()
+        route = self.routes.record(self.product_id, self.candidate_id, **self.kwargs)
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER contact_route_guard_update")
+            db.execute("ALTER TABLE discovered_contact_route DROP COLUMN last_correction_id")
+            db.execute("DROP TABLE contact_suppression_rule")
+            db.execute("PRAGMA user_version = 12")
+        reopened = ContactRoutes(PilotStore(self.path))
+        self.assertEqual(reopened.read(route["id"])["route_value"], "sales@example.org")
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 13)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "mutation needs correction"):
+                db.execute("UPDATE discovered_contact_route SET person_name = 'forged' WHERE id = ?",
+                           (route["id"],))
 
 
 if __name__ == "__main__":

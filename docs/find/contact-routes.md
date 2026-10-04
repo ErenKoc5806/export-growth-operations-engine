@@ -28,7 +28,22 @@ evidence. The correction event keeps actor/time/reason without retaining the
 old personal text. Cross-type matches are shown as `possible_duplicates`.
 The `suppress(...)` method stores a digest of an email/phone/form route and
 redacts primary route values and names and masks source URLs in API reads. It blocks future collection across
-generic and named variants of the same address/number. A retention expiry
+generic and named variants of the same address/number. For email it also
+blocks plus-address variants of the same base mailbox, conservatively treating
+`name+tag@domain` and `name@domain` as one suppression group. This is an
+opt-out safety rule, not a claim that every mail provider delivers those
+addresses to the same inbox. `suppress_domain(...)` blocks all routes for
+candidate companies under the selected company domain, including forms and
+phone numbers. Its operator must scope the domain to the actual objection.
+Existing v12 exact-hash suppressions remain effective after migration, but
+their redacted original address cannot be reconstructed to infer a base
+mailbox. An operator must reconcile those older entries before any live-data
+migration; a fresh live database avoids carrying unresolved synthetic records.
+HTTPS form URLs normalize host case and trailing slashes; query variants are
+shown as possible duplicates rather than silently merged. Plain HTTP forms
+are rejected. Direct SQL edits to route identity, source and value are rejected;
+person name/role correction needs an append-only correction event, and
+suppression only redacts values. A retention expiry
 masks personal values on reads, but provenance URLs can still exist in the
 database and backups. An operator must arrange their removal under the pilot's
 retention process. No automatic
