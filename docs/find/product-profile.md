@@ -1,10 +1,14 @@
 # Find #8 — manufacturer product profile
 
 `ProductProfiles(PilotStore(path))` records the manufacturer and product under
-stable IDs. Products with the same exact case-insensitive manufacturer name and
-country reuse one manufacturer row; conflicting supplied legal IDs prevent reuse.
-Name matching is provisional and a verified legal identity is still needed for
-live onboarding. `save_draft(payload, product_id=..., expected_revision=...)` creates
+stable IDs. When `manufacturer_legal_id` and country match, a new product reuses
+the manufacturer row; conflicting IDs never share a row. A name-only match,
+including Turkish I/İ/ı/i variants, requires an operator to select an existing
+`manufacturer_id` explicitly or provide a legal ID. The profile `read()` response
+exposes that ID. A first name-only product may still create a provisional row.
+The operator must check the legal ID and authority against independent records
+before live onboarding. `save_draft(payload, product_id=...,
+expected_revision=..., manufacturer_id=...)` creates
 an immutable full snapshot and returns the product ID and new revision. A new
 profile requires only the manufacturer and product names; all other fields may
 remain pending. A stale `expected_revision` is rejected. The SQLite v5 migration
