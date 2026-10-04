@@ -32,6 +32,21 @@ def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _migration_statements(script: str) -> Iterator[str]:
+    """Yield complete SQLite statements without the legacy transaction wrapper."""
+    lines = script.strip().splitlines()
+    if lines[0].strip() != "BEGIN IMMEDIATE;" or lines[-1].strip() != "COMMIT;":
+        raise ValueError("Migration must have a transaction wrapper")
+    pending = ""
+    for line in lines[1:-1]:
+        pending += line + "\n"
+        if sqlite3.complete_statement(pending):
+            yield pending.strip()
+            pending = ""
+    if pending.strip():
+        raise ValueError("Incomplete migration statement")
+
+
 class PilotStore:
     def __init__(
         self, path: str | Path, scope: PilotScope = DEFAULT_PILOT_SCOPE,
@@ -56,16 +71,20 @@ class PilotStore:
                 or metadata.st_mode & 0o077):
             raise PermissionError("Database must be owner-only and owned by the process UID")
         with closing(self._connect()) as db:
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version < 0 or version > len(MIGRATION_FILES):
-                raise ValueError(f"Unsupported database schema version: {version}")
-            for migration_name in MIGRATION_FILES[version:]:
-                migration = MIGRATIONS / migration_name
-                try:
-                    db.executescript(migration.read_text(encoding="utf-8"))
-                except Exception:
-                    db.rollback()
-                    raise
+            # Serialize version inspection and upgrade on the same SQLite writer lock.
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                version = db.execute("PRAGMA user_version").fetchone()[0]
+                if version < 0 or version > len(MIGRATION_FILES):
+                    raise ValueError(f"Unsupported database schema version: {version}")
+                for migration_name in MIGRATION_FILES[version:]:
+                    script = (MIGRATIONS / migration_name).read_text(encoding="utf-8")
+                    for statement in _migration_statements(script):
+                        db.execute(statement)
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10)
