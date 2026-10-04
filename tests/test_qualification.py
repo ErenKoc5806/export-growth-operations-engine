@@ -20,6 +20,7 @@ class BuyerQualificationTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "review.sqlite3"
         self.store = PilotStore(self.path)
         self.profiles = ProductProfiles(self.store)
+        self.profiles.register_source_document("EXAMPLE-SOURCE-1", b"invented test document")
         self.candidates = CandidateDiscovery(self.store)
         self.review = BuyerQualification(self.store)
         self.product_id, _ = self.profiles.save_draft(example_profile())

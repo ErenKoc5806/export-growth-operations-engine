@@ -9,8 +9,12 @@ market context for company research, not a lead or proof that a particular
 manufacturer's clamp fits that tariff code.
 
 Call `fetch_public_preview(year)` explicitly for a bounded public read. It has
-15-second timeout and a 1 MB response limit, requires no API key, rejects
-unexpected reporter/partner/flow/commodity/year or multiple rows, and stores
+15-second timeout and a 1 MB response limit, requires no API key, and retries
+only transient read failures up to three attempts with bounded backoff.
+It rejects unexpected reporter/partner/flow/commodity/year. When a response
+has multiple rows, it accepts exactly one canonical world aggregate with total
+customs and transport codes; ambiguous aggregates fail closed rather than
+being summed. It stores
 `AVAILABLE`, `MISSING` or `FAILED` with a bounded failure category. It never
 generates a buyer or contact. Network failure and missing data leave direct
 company research available. `record_manual(...)` preserves an operator's

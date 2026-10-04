@@ -6,11 +6,12 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from pilot_engine.access import LocalAccess, Role
 from pilot_engine.market_signals import MarketSignals
 from pilot_engine.store import PilotStore
+from pilot_engine.retry import ReadRetryPolicy
 
 
 def response(data):
@@ -63,12 +64,16 @@ class MarketSignalTests(unittest.TestCase):
         def failed(*_args, **_kwargs):
             raise URLError("network unavailable")
 
-        failed_result = self.signals.fetch_public_preview(2024, opener=failed)
+        failed_result = self.signals.fetch_public_preview(2024, opener=failed, sleep=lambda _: None)
         self.assertEqual((failed_result["status"], failed_result["failure_category"]),
-                         ("FAILED", "TRANSPORT"))
+                         ("FAILED", "TRANSIENT_READ"))
         self.assertNotIn("network unavailable", str(failed_result))
+        row = {"cmdCode": "732690", "reporterCode": 276, "partnerCode": 0,
+               "flowCode": "M", "period": 2024, "primaryValue": 99,
+               "customsCode": "C00", "motCode": 0, "partner2Code": 0,
+               "isAggregate": True}
         ambiguous = self.signals.fetch_public_preview(
-            2024, opener=lambda *_args, **_kw: response({"data": [{}, {}]}))
+            2024, opener=lambda *_args, **_kw: response({"data": [row, row]}))
         self.assertEqual((ambiguous["status"], ambiguous["failure_category"]),
                          ("FAILED", "AMBIGUOUS_ROWS"))
         wrong = self.signals.fetch_public_preview(
@@ -76,6 +81,35 @@ class MarketSignalTests(unittest.TestCase):
                 {"cmdCode": "732690", "reporterCode": 792, "partnerCode": 0,
                  "flowCode": "X", "period": 2024, "primaryValue": 99}]}))
         self.assertEqual(wrong["failure_category"], "INVALID_RESPONSE")
+
+        detail = {**row, "customsCode": "C01", "isAggregate": False, "primaryValue": 10}
+        split = self.signals.fetch_public_preview(
+            2024, opener=lambda *_args, **_kw: response({"data": [row, detail]}))
+        self.assertEqual(split["status"], "AVAILABLE")
+        self.assertEqual(split["trade_value_usd_text"], "99")
+        self.assertEqual(split["quality"]["responseRows"], 2)
+
+    def test_retry_only_temporary_public_reads(self):
+        attempts, delays = [], []
+        row = {"cmdCode": "732690", "reporterCode": 276, "partnerCode": 0,
+               "flowCode": "M", "period": 2024, "primaryValue": 42}
+
+        def flaky(*_args, **_kwargs):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise URLError("temporary")
+            return response({"data": [row]})
+
+        result = self.signals.fetch_public_preview(
+            2024, opener=flaky, retry_policy=ReadRetryPolicy(max_attempts=3),
+            sleep=delays.append)
+        self.assertEqual((result["status"], len(attempts), delays),
+                         ("AVAILABLE", 3, [0.5, 1.0]))
+        rejected = self.signals.fetch_public_preview(
+            2024, opener=lambda *_args, **_kw: (_ for _ in ()).throw(
+                HTTPError("https://example.org", 403, "forbidden", None, None)),
+            sleep=delays.append)
+        self.assertEqual(rejected["failure_category"], "HTTP_ERROR")
 
     def test_manual_evidence_and_scope_validation(self):
         snapshot = self.signals.record_manual(
@@ -102,6 +136,9 @@ class MarketSignalTests(unittest.TestCase):
                 year=2024, source_url="https://example.org", observed_at_utc="2026-10-04T00:00:00Z",
                 trade_value_usd=None, description="No data", source_note="Source checked")
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER profile_source_no_update")
+            db.execute("DROP TRIGGER profile_source_no_delete")
+            db.execute("DROP TABLE profile_source_document")
             db.execute("DROP TRIGGER buyer_fit_no_update")
             db.execute("DROP TRIGGER buyer_fit_no_delete")
             db.execute("DROP TABLE buyer_fit_decision")
@@ -117,7 +154,7 @@ class MarketSignalTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 5")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 8)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 9)
 
 
 if __name__ == "__main__":
