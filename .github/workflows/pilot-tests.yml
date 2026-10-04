@@ -19,7 +19,7 @@ jobs:
         run: |
           set -o pipefail
           python -W error::ResourceWarning -m unittest discover -s tests -v 2>&1 | tee /tmp/pilot-tests.log
-          if grep -q 'ResourceWarning' /tmp/pilot-tests.log; then
+          if grep -q 'ResourceWarning:' /tmp/pilot-tests.log; then
             echo 'ResourceWarning appeared in test output'
             exit 1
           fi
