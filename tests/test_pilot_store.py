@@ -4,8 +4,10 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from threading import Barrier
 
 from pilot_engine.access import LocalAccess, Role
 from pilot_engine.domain import OpportunityStatus
@@ -184,6 +186,31 @@ class PilotStoreTests(unittest.TestCase):
             PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+
+    def test_concurrent_v3_open_preserves_approval_and_migrates_once(self):
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        oid = self.case["opportunity_id"]
+        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("DROP TRIGGER approval_no_update")
+            db.execute("DROP TRIGGER approval_no_delete")
+            db.execute("PRAGMA user_version = 3")
+
+        barrier = Barrier(4)
+
+        def open_after_barrier(_):
+            barrier.wait()
+            return PilotStore(self.path).read_summary(oid)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(open_after_barrier, range(4)))
+        self.assertTrue(all(result["id"] == oid for result in results))
+        with closing(sqlite3.connect(self.path)) as db, db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM approval").fetchone()[0], 1)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "approvals are append-only"):
+                db.execute("DELETE FROM approval")
 
     def test_os_role_controls_contact_approval_and_records_denials(self):
         admin = PilotStore(self.path)
