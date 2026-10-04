@@ -19,11 +19,13 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.OPERATOR: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
                               "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION",
                               "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE",
-                              "READ_MARKET", "RECORD_MARKET"}),
+                              "READ_MARKET", "RECORD_MARKET", "READ_CANDIDATE",
+                              "RECORD_CANDIDATE"}),
     Role.ADMIN: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
                            "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION", "BACKUP",
                            "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE",
-                           "READ_MARKET", "RECORD_MARKET"}),
+                           "READ_MARKET", "RECORD_MARKET", "READ_CANDIDATE",
+                           "RECORD_CANDIDATE"}),
     Role.SERVICE: frozenset({"READ_SUMMARY"}),
 }
 

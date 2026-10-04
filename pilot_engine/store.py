@@ -21,7 +21,7 @@ MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 MIGRATION_FILES = (
     "001_initial.sql", "002_validation.sql", "003_access.sql",
     "004_immutable_approval.sql", "005_product_profile.sql",
-    "006_market_signal.sql",
+    "006_market_signal.sql", "007_buyer_candidate.sql",
 )
 
 
