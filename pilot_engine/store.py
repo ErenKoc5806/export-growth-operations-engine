@@ -20,7 +20,7 @@ from pilot_engine.workflow import PilotResult, run_case, validate_quotation_revi
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 MIGRATION_FILES = (
     "001_initial.sql", "002_validation.sql", "003_access.sql",
-    "004_immutable_approval.sql",
+    "004_immutable_approval.sql", "005_product_profile.sql",
 )
 
 
@@ -244,6 +244,11 @@ class PilotStore:
                 if row is None:
                     raise ValueError("Opportunity does not exist")
                 current = OpportunityStatus(row["status"])
+                pending = db.execute("""SELECT 1 FROM profile_revalidation
+                    WHERE opportunity_id = ? AND reviewed_revision < required_revision""",
+                    (opportunity_id,)).fetchone()
+                if pending is not None:
+                    raise ValueError("Product profile changed; buyer fit and outreach need re-review")
                 require_transition(current, target)
                 self._require_approval(
                     db, opportunity_id, target, approval_target_id, approval_revision
