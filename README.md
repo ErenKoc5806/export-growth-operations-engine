@@ -15,6 +15,8 @@ and durable mock capture are available for tests; no real mail is sent.
 logged as operator reports in the synthetic slice.
 [Follow-up reminders](docs/sell/followups.md) show due work and stop conditions
 without starting another contact.
+[Inbound response review](docs/sell/inbound-responses.md) separates synthetic
+provider results from operator-classified buyer messages.
 
 | Path | Repository | Current role |
 | --- | --- | --- |
