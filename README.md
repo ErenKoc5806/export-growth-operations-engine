@@ -13,6 +13,8 @@ synthetic Find handoffs. [Exact send decisions](docs/sell/email-delivery.md)
 and durable mock capture are available for tests; no real mail is sent.
 [Manual phone and form actions](docs/sell/manual-contact.md) can be planned and
 logged as operator reports in the synthetic slice.
+[Follow-up reminders](docs/sell/followups.md) show due work and stop conditions
+without starting another contact.
 
 | Path | Repository | Current role |
 | --- | --- | --- |

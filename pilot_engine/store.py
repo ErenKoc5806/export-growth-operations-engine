@@ -28,6 +28,7 @@ MIGRATION_FILES = (
     "014_sell_draft.sql",
     "015_sell_delivery.sql",
     "016_manual_contact.sql",
+    "017_followups.sql",
 )
 
 
