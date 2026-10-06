@@ -12,9 +12,12 @@ retained by the operator. Only `SYN-` evidence is accepted in this slice.
 
 `ExecuteOperations` records manual ERP handoff, goods-ready observations,
 freight plans and synthetic carrier-confirmation evidence as append-only events.
-No ERP or carrier API is called. Planned and actual readiness are separate;
+The manual handoff embeds a reviewable, order-hash-bound export preview with
+customer mapping, tax mapping, line, price and delivery fields. No ERP or
+carrier API is called. Planned and actual readiness are separate;
 an estimated/requested freight plan never implies a booking. A synthetic
 confirmation is explicitly marked `real_carrier_booking: false`.
+Freight requests require package count, weights and dimensions.
 
 `ExecuteDocuments` creates versioned draft commercial invoices, packing lists
 and document checklists. Invoice review requires legal-party and tax-review

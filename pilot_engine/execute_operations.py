@@ -66,7 +66,35 @@ class ExecuteOperations:
                    "status": "MANUAL_HANDOFF_RECORDED", "erp_created": False}
         if not evidence_ref.startswith("SYN-"):
             raise ValueError("Only synthetic handoff evidence is supported")
+        payload["export_preview"] = self.erp_export_preview(
+            order_id, customer_mapping_ref=customer_mapping_ref,
+            tax_mapping_ref=tax_mapping_ref)
         return self._record(order_id, operation_key, "MANUAL_ERP_HANDOFF", payload)
+
+    def erp_export_preview(self, order_id: str, *, customer_mapping_ref: str,
+                           tax_mapping_ref: str) -> dict:
+        """Return reviewable fields for manual entry; no ERP request is made."""
+        self.store._require_access("READ_EXECUTE", order_id)
+        customer_mapping_ref = _text(customer_mapping_ref, "customer mapping", 300)
+        tax_mapping_ref = _text(tax_mapping_ref, "tax mapping", 300)
+        with closing(self.store._connect()) as db:
+            order = self.orders._order(db, order_id)
+            if order is None or order["status"] != "LOCAL_ORDER_SYNTHETIC":
+                raise ValueError("Current approved local order is required")
+            po = order["payload"]
+            return {"order_id": order_id, "order_sha256": order["payload_sha256"],
+                    "customer_mapping_ref": customer_mapping_ref,
+                    "tax_mapping_ref": tax_mapping_ref,
+                    "buyer": po["buyer"], "seller": po["seller"],
+                    "source_po_id": po["po_id"], "source_quotation_id": po["quotation_id"],
+                    "lines": [{"sku": po["sku"], "description": po["description"],
+                               "quantity": po["quantity"], "unit": po["unit"],
+                               "unit_price": po["unit_price"], "total": po["total"]}],
+                    "currency": po["currency"], "total": po["total"],
+                    "incoterm_code": po["incoterm_code"],
+                    "incoterm_place": po["incoterm_place"],
+                    "requested_delivery_at_utc": po["requested_delivery_at_utc"],
+                    "erp_created": False, "data_origin": "SYNTHETIC"}
 
     def readiness(self, order_id: str, *, operation_key: str, status: str,
                   planned_at_utc: str, actual_at_utc: str | None,
@@ -104,7 +132,8 @@ class ExecuteOperations:
     def plan_freight(self, order_id: str, *, operation_key: str, status: str,
                      pickup: str, delivery: str, packages: int | None,
                      net_weight_kg: str | None, gross_weight_kg: str | None,
-                     requested_at_utc: str, forwarder_ref: str | None = None) -> int:
+                     requested_at_utc: str, dimensions: str | None = None,
+                     forwarder_ref: str | None = None) -> int:
         if status not in ("ESTIMATED", "REQUESTED", "UNKNOWN"):
             raise ValueError("Freight plan cannot imply a booking")
         pickup = _text(pickup, "pickup location", 500)
@@ -118,8 +147,11 @@ class ExecuteOperations:
                 or (gross_weight_kg is not None and gross is None)
                 or (net and gross and gross < net)):
             raise ValueError("Freight weights are inconsistent")
-        if status == "REQUESTED" and (packages is None or net is None or gross is None):
-            raise ValueError("Request needs reconciled packing and weights")
+        if dimensions is not None:
+            _text(dimensions, "shipment dimensions", 500)
+        if status == "REQUESTED" and (packages is None or net is None or gross is None
+                                       or dimensions is None):
+            raise ValueError("Request needs reconciled packing, weights and dimensions")
         if forwarder_ref is not None:
             _text(forwarder_ref, "forwarder reference", 300)
         self.store._require_access("EDIT_EXECUTE", order_id)
@@ -131,6 +163,7 @@ class ExecuteOperations:
         payload = {"status": status, "pickup": pickup, "delivery": delivery,
                    "packages": packages, "net_weight_kg": str(net) if net else None,
                    "gross_weight_kg": str(gross) if gross else None,
+                   "dimensions": dimensions,
                    "requested_at_utc": requested, "forwarder_ref": forwarder_ref,
                    **terms, "carrier_booked": False, "data_origin": "SYNTHETIC"}
         return self._record(order_id, operation_key, "FREIGHT_PLAN", payload)

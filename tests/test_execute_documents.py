@@ -12,7 +12,8 @@ class ExecuteDocumentsTests(unittest.TestCase):
                          requested_at_utc="2026-11-03T00:00:00Z")
         self.operations.plan_freight(self.order_id, operation_key="freight",
                                      status="REQUESTED", packages=1,
-                                     net_weight_kg="100", gross_weight_kg="120", **self.plan)
+                                     net_weight_kg="100", gross_weight_kg="120",
+                                     dimensions="100 x 40 x 30 cm", **self.plan)
         self.package = [{"quantity": "150", "net_weight_kg": "100",
                          "gross_weight_kg": "120", "dimensions": "100 x 40 x 30 cm"}]
 
@@ -82,7 +83,8 @@ class ExecuteDocumentsTests(unittest.TestCase):
                               reason="Invented package review")
         self.operations.plan_freight(self.order_id, operation_key="freight-revised",
                                      status="REQUESTED", packages=1,
-                                     net_weight_kg="100", gross_weight_kg="120", **self.plan)
+                                     net_weight_kg="100", gross_weight_kg="120",
+                                     dimensions="100 x 40 x 30 cm", **self.plan)
         self.assertEqual(self.documents.read(packing_id)["status"], "REVIEW_REQUIRED")
         self.assertFalse(self.documents.case_summary(self.order_id)["technical_case_accepted"])
 

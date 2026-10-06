@@ -21,6 +21,9 @@ class ExecuteOperationsTests(unittest.TestCase):
                     evidence_ref="SYN-MANUAL-EXPORT")
         event = self.operations.manual_erp_handoff(self.order_id, **args)
         self.assertEqual(self.operations.manual_erp_handoff(self.order_id, **args), event)
+        preview = self.operations.summary(self.order_id)["manual_erp_handoff"]["payload"]["export_preview"]
+        self.assertEqual(preview["lines"][0]["total"], "1875.00")
+        self.assertFalse(preview["erp_created"])
         with self.assertRaisesRegex(ValueError, "conflicts"):
             self.operations.manual_erp_handoff(self.order_id,
                                                **{**args, "handed_to": "Different"})
@@ -51,7 +54,8 @@ class ExecuteOperationsTests(unittest.TestCase):
                                          net_weight_kg="100", gross_weight_kg="120", **plan)
         self.operations.plan_freight(self.order_id, operation_key="request",
                                      status="REQUESTED", packages=10,
-                                     net_weight_kg="100", gross_weight_kg="120", **plan)
+                                     net_weight_kg="100", gross_weight_kg="120",
+                                     dimensions="10 boxes x 100 x 40 x 30 cm", **plan)
         with self.assertRaisesRegex(ValueError, "readiness"):
             self.operations.confirm_booking(self.order_id, operation_key="premature",
                                             confirmation_ref="SYN-CARRIER-1",
