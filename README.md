@@ -17,6 +17,8 @@ logged as operator reports in the synthetic slice.
 without starting another contact.
 [Inbound response review](docs/sell/inbound-responses.md) separates synthetic
 provider results from operator-classified buyer messages.
+[Versioned RFQ review](docs/sell/rfq.md) requires a classified inbound request
+and complete product requirements before a synthetic quote can begin.
 
 | Path | Repository | Current role |
 | --- | --- | --- |

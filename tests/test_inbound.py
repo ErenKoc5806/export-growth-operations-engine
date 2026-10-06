@@ -59,7 +59,7 @@ class InboundResponseTests(unittest.TestCase):
         self.assertEqual(view["classification"], "RFQ_CANDIDATE")
         self.assertFalse(view["rfq_created"])
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 18)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 19)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_inbound_review SET classification = 'REJECTION'")
 
@@ -85,6 +85,8 @@ class InboundResponseTests(unittest.TestCase):
     def test_v17_upgrade_keeps_followup(self):
         fid = self.followups.schedule(self.opportunity, self.source, **self.args)
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_rfq_decision", "sell_rfq_revision", "sell_rfq"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_inbound_review", "sell_inbound_message", "sell_provider_observation"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("PRAGMA user_version = 17")
