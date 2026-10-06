@@ -82,41 +82,45 @@ class FindHandoff:
     def read(self, handoff_id: str) -> dict[str, object] | None:
         self.store._require_access("READ_FIND_HANDOFF", handoff_id)
         with closing(self.store._connect()) as db:
-            row = db.execute("""SELECT h.*, r.* FROM find_handoff h
-                JOIN find_handoff_revision r ON r.handoff_id = h.id
-                WHERE h.id = ? ORDER BY r.revision DESC LIMIT 1""", (handoff_id,)).fetchone()
-            if row is None:
-                return None
-            result = dict(row)
-            product = db.execute("SELECT manufacturer_id FROM product WHERE id = ?",
-                                 (result["product_id"],)).fetchone()
-            candidate = db.execute("SELECT name, country_code FROM buyer_candidate WHERE id = ?",
-                                   (result["candidate_id"],)).fetchone()
-            result["manufacturer_id"] = product["manufacturer_id"]
-            result["market_country"] = candidate["country_code"]
-            result["buyer_company_name"] = candidate["name"]
-            route = db.execute("SELECT * FROM discovered_contact_route WHERE id = ?",
-                               (result["route_id"],)).fetchone()
-            evidence_ids = [item[0] for item in db.execute("""SELECT id FROM buyer_candidate_evidence
-                WHERE candidate_id = ? ORDER BY id""", (result["candidate_id"],))]
-            result["candidate_evidence_ids"] = evidence_ids
-            result["route_observation_ids"] = [item[0] for item in db.execute("""SELECT id
-                FROM contact_route_observation WHERE route_id = ? ORDER BY rowid""",
-                (result["route_id"],))]
-            try:
-                check, policy = _route_ready(db, route)
-                fit = _current_status(db, result["product_id"], result["candidate_id"])
-                profile = self._approved_profile(db, result["product_id"])
-                current = (profile["revision"] == result["profile_revision"]
-                           and profile["payload_sha256"] == result["profile_sha256"]
-                           and fit["sequence"] == result["fit_sequence"]
-                           and check["sequence"] == result["check_sequence"]
-                           and _observation_hash(db, result["route_id"]) == result["observation_sha256"]
-                           and _hash_ids(evidence_ids) == result["candidate_evidence_sha256"]
-                           and policy["sequence"] == result["source_policy_sequence"])
-            except ValueError:
-                current = False
-            result["status"] = "CURRENT_RESEARCH" if current else "REVIEW_REQUIRED"
-            result["route_value"] = route["route_value"] if current else None
-            result["send_allowed"] = False
-            return result
+            return self._read(db, handoff_id)
+
+    def _read(self, db: object, handoff_id: str) -> dict[str, object] | None:
+        """Internal read on an existing transaction; caller has checked access."""
+        row = db.execute("""SELECT h.*, r.* FROM find_handoff h
+            JOIN find_handoff_revision r ON r.handoff_id = h.id
+            WHERE h.id = ? ORDER BY r.revision DESC LIMIT 1""", (handoff_id,)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        product = db.execute("SELECT manufacturer_id FROM product WHERE id = ?",
+                             (result["product_id"],)).fetchone()
+        candidate = db.execute("SELECT name, country_code FROM buyer_candidate WHERE id = ?",
+                               (result["candidate_id"],)).fetchone()
+        result["manufacturer_id"] = product["manufacturer_id"]
+        result["market_country"] = candidate["country_code"]
+        result["buyer_company_name"] = candidate["name"]
+        route = db.execute("SELECT * FROM discovered_contact_route WHERE id = ?",
+                           (result["route_id"],)).fetchone()
+        evidence_ids = [item[0] for item in db.execute("""SELECT id FROM buyer_candidate_evidence
+            WHERE candidate_id = ? ORDER BY id""", (result["candidate_id"],))]
+        result["candidate_evidence_ids"] = evidence_ids
+        result["route_observation_ids"] = [item[0] for item in db.execute("""SELECT id
+            FROM contact_route_observation WHERE route_id = ? ORDER BY rowid""",
+            (result["route_id"],))]
+        try:
+            check, policy = _route_ready(db, route)
+            fit = _current_status(db, result["product_id"], result["candidate_id"])
+            profile = self._approved_profile(db, result["product_id"])
+            current = (profile["revision"] == result["profile_revision"]
+                       and profile["payload_sha256"] == result["profile_sha256"]
+                       and fit["sequence"] == result["fit_sequence"]
+                       and check["sequence"] == result["check_sequence"]
+                       and _observation_hash(db, result["route_id"]) == result["observation_sha256"]
+                       and _hash_ids(evidence_ids) == result["candidate_evidence_sha256"]
+                       and policy["sequence"] == result["source_policy_sequence"])
+        except ValueError:
+            current = False
+        result["status"] = "CURRENT_RESEARCH" if current else "REVIEW_REQUIRED"
+        result["route_value"] = route["route_value"] if current else None
+        result["send_allowed"] = False
+        return result

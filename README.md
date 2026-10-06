@@ -8,6 +8,9 @@ Foundation contains a **synthetic** 732690 → Germany connection-clamp acceptan
 
 ## Existing components
 
+Sell has local, revisioned [outreach drafts](docs/sell/outreach-draft.md) for
+synthetic Find handoffs. Drafts do not send messages or grant approval.
+
 | Path | Repository | Current role |
 | --- | --- | --- |
 | `components/ai-worker` | [AI-Worker](https://github.com/ErenKoc5806/AI-Worker) | Candidate PO and operations functions; not integrated |
