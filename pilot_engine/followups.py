@@ -112,6 +112,15 @@ class Followups:
             result["status"] = "SUPPRESSED"
             result["stop_reason"] = stop["reason"]
             return result
+        reviewed_reply = db.execute("""SELECT 1 FROM sell_inbound_review r
+            WHERE r.opportunity_id = ? AND r.sequence =
+                (SELECT MAX(x.sequence) FROM sell_inbound_review x
+                 WHERE x.inbound_id = r.inbound_id) LIMIT 1""",
+            (row["opportunity_id"],)).fetchone()
+        if reviewed_reply:
+            result["status"] = "SUPPRESSED"
+            result["stop_reason"] = "REVIEWED_REPLY"
+            return result
         handoff = self.handoffs._read(db, row["handoff_id"])
         if (handoff is None or handoff["status"] != "CURRENT_RESEARCH"
                 or handoff["route_id"] != row["route_id"]):

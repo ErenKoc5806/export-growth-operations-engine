@@ -43,7 +43,7 @@ class FollowupTests(unittest.TestCase):
         self.assertEqual(self.followups.read(fid)["status"], "COMPLETED")
         self.assertEqual(self.followups.list_due(view["owner_id"]), [])
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 18)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("DELETE FROM sell_followup_event")
 
@@ -89,12 +89,14 @@ class FollowupTests(unittest.TestCase):
 
     def test_v16_upgrade_retains_manual_action(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_inbound_review", "sell_inbound_message", "sell_provider_observation"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_followup_event", "sell_followup_stop", "sell_followup"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("PRAGMA user_version = 16")
         reopened = PilotStore(self.path)
         with closing(reopened._connect()) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 18)
         self.assertTrue(Followups(reopened).schedule(self.opportunity, self.source, **self.args))
 
 

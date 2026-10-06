@@ -136,6 +136,8 @@ class MarketSignalTests(unittest.TestCase):
                 year=2024, source_url="https://example.org", observed_at_utc="2026-10-04T00:00:00Z",
                 trade_value_usd=None, description="No data", source_note="Source checked")
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_inbound_review", "sell_inbound_message", "sell_provider_observation"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_followup_event", "sell_followup_stop", "sell_followup"):
                 db.execute(f"DROP TABLE {table}")
             for table in ("manual_contact_event", "manual_contact_action", "sell_opportunity"):
@@ -169,7 +171,7 @@ class MarketSignalTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 5")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 18)
 
 
 if __name__ == "__main__":
