@@ -25,7 +25,9 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
                               "SUPPRESS_CONTACT", "CORRECT_DISCOVERED_CONTACT",
                               "VERIFY_DISCOVERED_CONTACT", "RECORD_FIND_HANDOFF",
                               "READ_FIND_HANDOFF", "READ_SELL_DRAFT", "EDIT_SELL_DRAFT",
-                              "DISPATCH_SYNTHETIC_MAIL", "READ_SELL_DELIVERY"}),
+                              "DISPATCH_SYNTHETIC_MAIL", "READ_SELL_DELIVERY",
+                              "PLAN_MANUAL_CONTACT", "RECORD_MANUAL_CONTACT",
+                              "READ_MANUAL_CONTACT"}),
     Role.ADMIN: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
                            "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION", "BACKUP",
                            "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE",
@@ -37,7 +39,8 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
                            "RECORD_FIND_HANDOFF", "READ_FIND_HANDOFF",
                            "READ_SELL_DRAFT", "EDIT_SELL_DRAFT", "APPROVE_SELL_SEND",
                            "DISPATCH_SYNTHETIC_MAIL", "RECONCILE_SELL_DELIVERY",
-                           "READ_SELL_DELIVERY"}),
+                           "READ_SELL_DELIVERY", "PLAN_MANUAL_CONTACT",
+                           "RECORD_MANUAL_CONTACT", "READ_MANUAL_CONTACT"}),
     Role.SERVICE: frozenset({"READ_SUMMARY"}),
 }
 
