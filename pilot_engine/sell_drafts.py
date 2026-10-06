@@ -169,53 +169,57 @@ class SellDrafts:
     def read(self, draft_id: str, revision: int | None = None) -> dict | None:
         self.store._require_access("READ_SELL_DRAFT", draft_id)
         with closing(self.store._connect()) as db:
-            latest = db.execute("SELECT MAX(revision) FROM sell_draft_revision WHERE draft_id = ?",
-                                (draft_id,)).fetchone()[0]
-            if latest is None:
-                return None
-            selected = latest if revision is None else revision
-            row = db.execute("""SELECT r.*, d.handoff_id AS parent_handoff_id,
-                x.reason AS rejection_reason FROM sell_draft_revision r
-                JOIN sell_draft d ON d.id = r.draft_id
-                LEFT JOIN sell_draft_rejection x ON x.draft_id = r.draft_id
-                    AND x.revision = r.revision
-                WHERE r.draft_id = ? AND r.revision = ?""", (draft_id, selected)).fetchone()
-            if row is None:
-                return None
-            result = dict(row)
-            handoff = self.handoffs.read(row["handoff_id"])
-            current = (selected == latest and handoff is not None
-                       and handoff["status"] == "CURRENT_RESEARCH"
-                       and handoff["revision"] == row["handoff_revision"]
-                       and handoff["profile_sha256"] == row["profile_sha256"]
-                       and handoff["route_id"] == row["recipient_route_id"]
-                       and handoff["route_value"] == row["recipient_value"])
-            result["status"] = ("REJECTED" if row["rejection_reason"] else
-                                "CURRENT_DRAFT" if current else "REVIEW_REQUIRED")
-            if not current:
-                result["recipient_value"] = None
-            result["claim_refs"] = json.loads(result.pop("claim_refs_json"))
-            result["warnings"] = json.loads(result.pop("warnings_json"))
-            fit = db.execute("""SELECT explanation, checks_json, outcome
-                FROM buyer_fit_decision WHERE sequence = ?""",
-                (row["fit_sequence"],)).fetchone()
-            result["buyer_fit"] = ({"explanation": fit["explanation"],
-                                    "checks": json.loads(fit["checks_json"]),
-                                    "outcome": fit["outcome"]} if fit else None)
-            result["candidate_evidence_ids"] = (result["buyer_fit"]["checks"]
-                                                .get("cited_evidence_ids", [])
-                                                if result["buyer_fit"] else [])
-            source = db.execute("""SELECT h.product_id, r.profile_revision
-                FROM find_handoff h JOIN find_handoff_revision r ON r.handoff_id = h.id
-                WHERE h.id = ? AND r.revision = ?""",
-                (row["handoff_id"], row["handoff_revision"])).fetchone()
-            profile = db.execute("""SELECT payload_json FROM product_profile_revision
-                WHERE product_id = ? AND revision = ? AND payload_sha256 = ?""",
-                (source["product_id"], source["profile_revision"],
-                 row["profile_sha256"])).fetchone() if source else None
-            result["permitted_claims"] = ([item for item in json.loads(profile["payload_json"])
-                                           .get("claims", []) if item["confirmed_use"]]
-                                          if profile else [])
-            result["send_allowed"] = False
-            result["approval_valid"] = False
-            return result
+            return self._read(db, draft_id, revision)
+
+    def _read(self, db: object, draft_id: str, revision: int | None = None) -> dict | None:
+        """Internal read using the caller's transaction after its access check."""
+        latest = db.execute("SELECT MAX(revision) FROM sell_draft_revision WHERE draft_id = ?",
+                            (draft_id,)).fetchone()[0]
+        if latest is None:
+            return None
+        selected = latest if revision is None else revision
+        row = db.execute("""SELECT r.*, d.handoff_id AS parent_handoff_id,
+            x.reason AS rejection_reason FROM sell_draft_revision r
+            JOIN sell_draft d ON d.id = r.draft_id
+            LEFT JOIN sell_draft_rejection x ON x.draft_id = r.draft_id
+                AND x.revision = r.revision
+            WHERE r.draft_id = ? AND r.revision = ?""", (draft_id, selected)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        handoff = self.handoffs._read(db, row["handoff_id"])
+        current = (selected == latest and handoff is not None
+                   and handoff["status"] == "CURRENT_RESEARCH"
+                   and handoff["revision"] == row["handoff_revision"]
+                   and handoff["profile_sha256"] == row["profile_sha256"]
+                   and handoff["route_id"] == row["recipient_route_id"]
+                   and handoff["route_value"] == row["recipient_value"])
+        result["status"] = ("REJECTED" if row["rejection_reason"] else
+                            "CURRENT_DRAFT" if current else "REVIEW_REQUIRED")
+        if not current:
+            result["recipient_value"] = None
+        result["claim_refs"] = json.loads(result.pop("claim_refs_json"))
+        result["warnings"] = json.loads(result.pop("warnings_json"))
+        fit = db.execute("""SELECT explanation, checks_json, outcome
+            FROM buyer_fit_decision WHERE sequence = ?""",
+            (row["fit_sequence"],)).fetchone()
+        result["buyer_fit"] = ({"explanation": fit["explanation"],
+                                "checks": json.loads(fit["checks_json"]),
+                                "outcome": fit["outcome"]} if fit else None)
+        result["candidate_evidence_ids"] = (result["buyer_fit"]["checks"]
+                                            .get("cited_evidence_ids", [])
+                                            if result["buyer_fit"] else [])
+        source = db.execute("""SELECT h.product_id, r.profile_revision
+            FROM find_handoff h JOIN find_handoff_revision r ON r.handoff_id = h.id
+            WHERE h.id = ? AND r.revision = ?""",
+            (row["handoff_id"], row["handoff_revision"])).fetchone()
+        profile = db.execute("""SELECT payload_json FROM product_profile_revision
+            WHERE product_id = ? AND revision = ? AND payload_sha256 = ?""",
+            (source["product_id"], source["profile_revision"],
+             row["profile_sha256"])).fetchone() if source else None
+        result["permitted_claims"] = ([item for item in json.loads(profile["payload_json"])
+                                       .get("claims", []) if item["confirmed_use"]]
+                                      if profile else [])
+        result["send_allowed"] = False
+        result["approval_valid"] = False
+        return result

@@ -79,7 +79,7 @@ class ContactRouteTests(unittest.TestCase):
                                      "source_ref": "FORM-1"})
         self.assertEqual(form["status"], "UNVERIFIED")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
 
     def test_named_route_suppression_and_conflicting_evidence(self):
         self.qualify()
@@ -304,6 +304,8 @@ class ContactRouteTests(unittest.TestCase):
 
     def test_v9_upgrade_preserves_prior_profile_and_candidate(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_send_result", "sell_send_attempt", "sell_send_decision"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_draft_rejection", "sell_draft_revision", "sell_draft"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("DROP TABLE contact_suppression_rule")
@@ -319,7 +321,7 @@ class ContactRouteTests(unittest.TestCase):
         self.assertIsNotNone(ProductProfiles(reopened).read(self.product_id))
         self.assertIsNotNone(CandidateDiscovery(reopened).read(self.candidate_id))
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
 
     def test_v10_upgrade_preserves_contact_route(self):
         self.qualify()
@@ -328,6 +330,8 @@ class ContactRouteTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("DROP TRIGGER contact_route_guard_update")
             db.execute("ALTER TABLE discovered_contact_route DROP COLUMN last_correction_id")
+            for table in ("sell_send_result", "sell_send_attempt", "sell_send_decision"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_draft_rejection", "sell_draft_revision", "sell_draft"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("DROP TABLE contact_suppression_rule")
@@ -338,7 +342,7 @@ class ContactRouteTests(unittest.TestCase):
         reopened = ContactRoutes(PilotStore(self.path))
         self.assertEqual(reopened.read(route["id"])["route_value"], "sales@example.org")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
 
     def test_handoff_versions_current_evidence_without_duplicate_identity(self):
         self.qualify()
@@ -390,6 +394,8 @@ class ContactRouteTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("DROP TRIGGER contact_route_guard_update")
             db.execute("ALTER TABLE discovered_contact_route DROP COLUMN last_correction_id")
+            for table in ("sell_send_result", "sell_send_attempt", "sell_send_decision"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_draft_rejection", "sell_draft_revision", "sell_draft"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("DROP TABLE contact_suppression_rule")
@@ -399,7 +405,7 @@ class ContactRouteTests(unittest.TestCase):
         reopened = ContactRoutes(PilotStore(self.path))
         self.assertEqual(reopened.read(route["id"])["status"], "VERIFIED_ROUTE")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
 
     def test_v12_upgrade_preserves_route_and_installs_mutation_guard(self):
         self.qualify()
@@ -408,6 +414,8 @@ class ContactRouteTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("DROP TRIGGER contact_route_guard_update")
             db.execute("ALTER TABLE discovered_contact_route DROP COLUMN last_correction_id")
+            for table in ("sell_send_result", "sell_send_attempt", "sell_send_decision"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_draft_rejection", "sell_draft_revision", "sell_draft"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("DROP TABLE contact_suppression_rule")
@@ -415,7 +423,7 @@ class ContactRouteTests(unittest.TestCase):
         reopened = ContactRoutes(PilotStore(self.path))
         self.assertEqual(reopened.read(route["id"])["route_value"], "sales@example.org")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "mutation needs correction"):
                 db.execute("UPDATE discovered_contact_route SET person_name = 'forged' WHERE id = ?",
                            (route["id"],))
