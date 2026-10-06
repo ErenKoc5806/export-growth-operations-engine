@@ -26,6 +26,7 @@ MIGRATION_FILES = (
     "010_contact_routes.sql", "011_contact_verification.sql", "012_find_handoff.sql",
     "013_contact_suppression_guards.sql",
     "014_sell_draft.sql",
+    "015_sell_delivery.sql",
 )
 
 

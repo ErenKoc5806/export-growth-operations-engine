@@ -85,7 +85,7 @@ class SellDraftTests(unittest.TestCase):
             self.drafts.revise(draft_id, 1, **self.sender, language="en",
                                subject="Old", body="Old", claim_refs=[])
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 14)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_draft_revision SET body = 'forged' WHERE draft_id = ?",
                            (draft_id,))
