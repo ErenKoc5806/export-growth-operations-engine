@@ -126,8 +126,12 @@ class SellRFQ:
                         or payload["unit"] != product["unit"]):
                     raise ValueError("RFQ product, unit and corridor need resolution")
                 profile = FindHandoff._approved_profile(db, product["id"])
-                if payload["destination"] != json.loads(profile["payload_json"])["target_country"]:
+                profile_payload = json.loads(profile["payload_json"])
+                if payload["destination"] != profile_payload["target_country"]:
                     raise ValueError("RFQ product, unit and corridor need resolution")
+                if Decimal(payload["quantity"]) < Decimal(
+                        profile_payload["minimum_order_quantity"]):
+                    raise ValueError("RFQ quantity is below the manufacturer's minimum order quantity")
                 if prior and prior["decision"] == "ACCEPT":
                     raise ValueError("RFQ revision already accepted")
             elif prior is None or prior["decision"] != "ACCEPT":
@@ -177,11 +181,14 @@ class SellRFQ:
                 WHERE o.id = ?""", (row["opportunity_id"],)).fetchone()
             try:
                 profile = FindHandoff._approved_profile(db, product["id"])
-                target_country = json.loads(profile["payload_json"])["target_country"]
+                profile_payload = json.loads(profile["payload_json"])
                 current = (result["payload"].get("sku") == product["sku"]
                            and result["payload"].get("unit") == product["unit"]
-                           and result["payload"].get("destination") == target_country)
-            except (ValueError, TypeError):
+                           and result["payload"].get("destination") ==
+                           profile_payload["target_country"]
+                           and Decimal(result["payload"]["quantity"]) >=
+                           Decimal(profile_payload["minimum_order_quantity"]))
+            except (ValueError, TypeError, InvalidOperation, KeyError):
                 current = False
         result["status"] = ("REVIEW_REQUIRED" if not current else
                             "ACCEPTED_SYNTHETIC" if decision and decision["decision"] == "ACCEPT"

@@ -1,3 +1,4 @@
+import copy
 import sqlite3
 import unittest
 from contextlib import closing
@@ -5,6 +6,7 @@ from contextlib import closing
 from pilot_engine.rfq import SellRFQ
 from pilot_engine.store import PilotStore
 import test_inbound
+from test_product_profiles import example_profile
 
 
 class SellRFQTests(unittest.TestCase):
@@ -70,6 +72,21 @@ class SellRFQTests(unittest.TestCase):
             self.rfqs.decide(rfq_id, 1, "ACCEPT", "Product differs")
         with self.assertRaisesRegex(ValueError, "revision changed"):
             self.rfqs.save(self.inbound_id, self.complete, rfq_id=rfq_id, expected_revision=0)
+
+    def test_manufacturer_moq_gates_acceptance_and_current_quote_eligibility(self):
+        rfq_id, _ = self.rfqs.save(self.inbound_id,
+                                   {**self.complete, "quantity": "99"})
+        with self.assertRaisesRegex(ValueError, "minimum order quantity"):
+            self.rfqs.decide(rfq_id, 1, "ACCEPT", "Below manufacturer MOQ")
+        _, revision = self.rfqs.save(self.inbound_id, self.complete,
+                                     rfq_id=rfq_id, expected_revision=1)
+        self.rfqs.decide(rfq_id, revision, "ACCEPT", "Meets manufacturer MOQ")
+        revised = copy.deepcopy(example_profile())
+        revised["minimum_order_quantity"] = "200"
+        self.profiles.save_draft(revised, product_id=self.product_id, expected_revision=1)
+        self.profiles.decide(self.product_id, 2, "APPROVED", "Increased invented MOQ")
+        self.assertEqual(self.rfqs.read(rfq_id)["status"], "REVIEW_REQUIRED")
+        self.assertFalse(self.rfqs.read(rfq_id)["quote_allowed"])
 
     def test_revoked_product_blocks_accepted_rfq_for_quotation(self):
         rfq_id, _ = self.rfqs.save(self.inbound_id, self.complete)
