@@ -19,6 +19,9 @@ without starting another contact.
 provider results from operator-classified buyer messages.
 [Versioned RFQ review](docs/sell/rfq.md) requires a classified inbound request
 and complete product requirements before a synthetic quote can begin.
+[Versioned quotations](docs/sell/quotation.md) bind test pricing evidence and
+commercial terms to an accepted synthetic RFQ; they cannot be sent or accepted
+as a live customer offer.
 
 | Path | Repository | Current role |
 | --- | --- | --- |
