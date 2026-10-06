@@ -42,7 +42,7 @@ class SellRFQTests(unittest.TestCase):
         self.rfqs.decide(rfq_id, 2, "REVOKE", "Operator found an ambiguity")
         self.assertEqual(self.rfqs.read(rfq_id)["status"], "REVOKED")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 19)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 20)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_rfq_revision SET revision = 3")
 
@@ -80,6 +80,8 @@ class SellRFQTests(unittest.TestCase):
 
     def test_v18_upgrade_keeps_inbound(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_quotation_decision", "sell_quotation_revision", "sell_quotation", "sell_price_authority"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_rfq_decision", "sell_rfq_revision", "sell_rfq"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("PRAGMA user_version = 18")
@@ -87,7 +89,7 @@ class SellRFQTests(unittest.TestCase):
         self.assertIsNotNone(self.inbound.read(self.inbound_id))
         self.assertTrue(SellRFQ(reopened).save(self.inbound_id, self.complete)[0].startswith("RF-"))
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 19)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 20)
 
 
 if __name__ == "__main__":

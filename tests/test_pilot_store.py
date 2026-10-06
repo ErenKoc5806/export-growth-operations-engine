@@ -167,7 +167,7 @@ class PilotStoreTests(unittest.TestCase):
         store = PilotStore(self.path)
         store.save_synthetic_case(self.case)
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 19)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 20)
 
     def test_v1_upgrade_rejects_existing_invalid_quote(self):
         migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
@@ -193,6 +193,8 @@ class PilotStoreTests(unittest.TestCase):
         oid = self.case["opportunity_id"]
         store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_quotation_decision", "sell_quotation_revision", "sell_quotation", "sell_price_authority"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_rfq_decision", "sell_rfq_revision", "sell_rfq"):
                 db.execute(f"DROP TABLE {table}")
             for table in ("sell_inbound_review", "sell_inbound_message", "sell_provider_observation"):
@@ -248,7 +250,7 @@ class PilotStoreTests(unittest.TestCase):
             results = list(pool.map(open_after_barrier, range(4)))
         self.assertTrue(all(result["id"] == oid for result in results))
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 19)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 20)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM approval").fetchone()[0], 1)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "approvals are append-only"):
                 db.execute("DELETE FROM approval")

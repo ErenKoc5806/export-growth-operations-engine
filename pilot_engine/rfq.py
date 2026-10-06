@@ -141,48 +141,52 @@ class SellRFQ:
     def read(self, rfq_id: str) -> dict | None:
         self.store._require_access("READ_SELL_RFQ", rfq_id)
         with closing(self.store._connect()) as db:
-            row = db.execute("""SELECT q.*, r.revision, r.inbound_review_sequence,
-                r.payload_json, r.payload_sha256, r.missing_json FROM sell_rfq q
-                JOIN sell_rfq_revision r ON r.rfq_id = q.id
-                WHERE q.id = ? ORDER BY r.revision DESC LIMIT 1""", (rfq_id,)).fetchone()
-            if row is None:
-                return None
-            result = dict(row)
-            result["payload"] = json.loads(result.pop("payload_json"))
-            result["missing_fields"] = json.loads(result.pop("missing_json"))
-            inbound = db.execute("SELECT * FROM sell_inbound_message WHERE id = ?",
-                                 (row["inbound_id"],)).fetchone()
-            result["source"] = {key: inbound[key] for key in
-                                ("source_system", "source_ref", "raw_ref", "received_at_utc",
-                                 "channel", "data_origin")}
-            cited_review = db.execute("""SELECT evidence_ref, explanation FROM sell_inbound_review
-                WHERE sequence = ?""", (row["inbound_review_sequence"],)).fetchone()
-            result["source_review"] = dict(cited_review) if cited_review else None
-            decision = db.execute("""SELECT decision FROM sell_rfq_decision
-                WHERE rfq_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
-                (rfq_id, row["revision"])).fetchone()
-            review = db.execute("""SELECT sequence, classification, opportunity_id
-                FROM sell_inbound_review WHERE inbound_id = ? ORDER BY sequence DESC LIMIT 1""",
-                (row["inbound_id"],)).fetchone()
-            current = (review is not None and review["sequence"] == row["inbound_review_sequence"]
-                       and review["classification"] == "RFQ_CANDIDATE"
-                       and review["opportunity_id"] == row["opportunity_id"])
-            if current and decision and decision["decision"] == "ACCEPT":
-                product = db.execute("""SELECT p.id, p.sku, p.unit
-                    FROM sell_opportunity o JOIN product p ON p.id = o.product_id
-                    WHERE o.id = ?""", (row["opportunity_id"],)).fetchone()
-                try:
-                    profile = FindHandoff._approved_profile(db, product["id"])
-                    target_country = json.loads(profile["payload_json"])["target_country"]
-                    current = (result["payload"].get("sku") == product["sku"]
-                               and result["payload"].get("unit") == product["unit"]
-                               and result["payload"].get("destination") == target_country)
-                except (ValueError, TypeError):
-                    current = False
-            result["status"] = ("REVIEW_REQUIRED" if not current else
-                                "ACCEPTED_SYNTHETIC" if decision and decision["decision"] == "ACCEPT"
-                                else "REVOKED" if decision and decision["decision"] == "REVOKE"
-                                else "DRAFT")
-            result["quote_allowed"] = result["status"] == "ACCEPTED_SYNTHETIC"
-            result["live_customer_request"] = False
-            return result
+            return self._read(db, rfq_id)
+
+    def _read(self, db: object, rfq_id: str) -> dict | None:
+        """Internal read in a caller-owned transaction after its access check."""
+        row = db.execute("""SELECT q.*, r.revision, r.inbound_review_sequence,
+            r.payload_json, r.payload_sha256, r.missing_json FROM sell_rfq q
+            JOIN sell_rfq_revision r ON r.rfq_id = q.id
+            WHERE q.id = ? ORDER BY r.revision DESC LIMIT 1""", (rfq_id,)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["payload"] = json.loads(result.pop("payload_json"))
+        result["missing_fields"] = json.loads(result.pop("missing_json"))
+        inbound = db.execute("SELECT * FROM sell_inbound_message WHERE id = ?",
+                             (row["inbound_id"],)).fetchone()
+        result["source"] = {key: inbound[key] for key in
+                            ("source_system", "source_ref", "raw_ref", "received_at_utc",
+                             "channel", "data_origin")}
+        cited_review = db.execute("""SELECT evidence_ref, explanation FROM sell_inbound_review
+            WHERE sequence = ?""", (row["inbound_review_sequence"],)).fetchone()
+        result["source_review"] = dict(cited_review) if cited_review else None
+        decision = db.execute("""SELECT decision FROM sell_rfq_decision
+            WHERE rfq_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
+            (rfq_id, row["revision"])).fetchone()
+        review = db.execute("""SELECT sequence, classification, opportunity_id
+            FROM sell_inbound_review WHERE inbound_id = ? ORDER BY sequence DESC LIMIT 1""",
+            (row["inbound_id"],)).fetchone()
+        current = (review is not None and review["sequence"] == row["inbound_review_sequence"]
+                   and review["classification"] == "RFQ_CANDIDATE"
+                   and review["opportunity_id"] == row["opportunity_id"])
+        if current and decision and decision["decision"] == "ACCEPT":
+            product = db.execute("""SELECT p.id, p.sku, p.unit
+                FROM sell_opportunity o JOIN product p ON p.id = o.product_id
+                WHERE o.id = ?""", (row["opportunity_id"],)).fetchone()
+            try:
+                profile = FindHandoff._approved_profile(db, product["id"])
+                target_country = json.loads(profile["payload_json"])["target_country"]
+                current = (result["payload"].get("sku") == product["sku"]
+                           and result["payload"].get("unit") == product["unit"]
+                           and result["payload"].get("destination") == target_country)
+            except (ValueError, TypeError):
+                current = False
+        result["status"] = ("REVIEW_REQUIRED" if not current else
+                            "ACCEPTED_SYNTHETIC" if decision and decision["decision"] == "ACCEPT"
+                            else "REVOKED" if decision and decision["decision"] == "REVOKE"
+                            else "DRAFT")
+        result["quote_allowed"] = result["status"] == "ACCEPTED_SYNTHETIC"
+        result["live_customer_request"] = False
+        return result
