@@ -64,7 +64,7 @@ class ManualContactTests(unittest.TestCase):
         self.assertEqual(len(record["events"]), 2)
         self.assertEqual(record["status"], "UNKNOWN")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 16)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE manual_contact_event SET outcome = 'UNKNOWN'")
 
@@ -124,6 +124,8 @@ class ManualContactTests(unittest.TestCase):
 
     def test_v15_upgrade_preserves_find_and_installs_manual_tables(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_followup_event", "sell_followup_stop", "sell_followup"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("manual_contact_event", "manual_contact_action", "sell_opportunity"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("PRAGMA user_version = 15")
@@ -131,7 +133,7 @@ class ManualContactTests(unittest.TestCase):
         self.assertIsNotNone(FindHandoff(reopened).read(self.form_handoff))
         self.assertTrue(ManualContact(reopened).open_opportunity(self.form_handoff).startswith("SO-"))
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 16)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
 
 
 if __name__ == "__main__":

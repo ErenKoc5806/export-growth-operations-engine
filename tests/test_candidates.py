@@ -97,6 +97,8 @@ class CandidateDiscoveryTests(unittest.TestCase):
 
     def test_v6_upgrade_retains_market_signal_table(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("sell_followup_event", "sell_followup_stop", "sell_followup"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("manual_contact_event", "manual_contact_action", "sell_opportunity"):
                 db.execute(f"DROP TABLE {table}")
             for table in ("sell_send_result", "sell_send_attempt", "sell_send_decision"):
@@ -125,7 +127,7 @@ class CandidateDiscoveryTests(unittest.TestCase):
             db.execute("PRAGMA user_version = 6")
         PilotStore(self.path)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 16)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name = 'market_signal_snapshot'").fetchone())
 
 
