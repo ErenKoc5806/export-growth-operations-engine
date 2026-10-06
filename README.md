@@ -11,6 +11,8 @@ Foundation contains a **synthetic** 732690 → Germany connection-clamp acceptan
 Sell has local, revisioned [outreach drafts](docs/sell/outreach-draft.md) for
 synthetic Find handoffs. [Exact send decisions](docs/sell/email-delivery.md)
 and durable mock capture are available for tests; no real mail is sent.
+[Manual phone and form actions](docs/sell/manual-contact.md) can be planned and
+logged as operator reports in the synthetic slice.
 
 | Path | Repository | Current role |
 | --- | --- | --- |

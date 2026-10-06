@@ -38,7 +38,7 @@ class SellDeliveryTests(unittest.TestCase):
         self.assertEqual(self.delivery.dispatch_synthetic(self.draft_id, 1, self.mailbox), result)
         self.assertEqual(len(self.mailbox.messages), 1)
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 16)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_send_decision SET decision = 'REVOKE'")
 
@@ -81,6 +81,8 @@ class SellDeliveryTests(unittest.TestCase):
 
     def test_v14_upgrade_preserves_draft_and_installs_decision_tables(self):
         with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ("manual_contact_event", "manual_contact_action", "sell_opportunity"):
+                db.execute(f"DROP TABLE {table}")
             for table in ("sell_send_result", "sell_send_attempt", "sell_send_decision"):
                 db.execute(f"DROP TABLE {table}")
             db.execute("PRAGMA user_version = 14")
@@ -88,7 +90,7 @@ class SellDeliveryTests(unittest.TestCase):
         self.assertEqual(SellDelivery(reopened).preview(self.draft_id, 1)["status"],
                          "CURRENT_DRAFT")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 15)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 16)
 
 
 if __name__ == "__main__":
