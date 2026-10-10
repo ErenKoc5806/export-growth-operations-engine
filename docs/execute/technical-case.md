@@ -21,6 +21,14 @@ carrier API is called. Planned and actual readiness are separate;
 an estimated/requested freight plan never implies a booking. A synthetic
 confirmation is explicitly marked `real_carrier_booking: false`.
 Freight requests require package count, weights and dimensions.
+Recording a synthetic booking observation requires current `READY` evidence,
+the latest requested freight plan and a reviewed packing revision bound to that
+plan. Order/shipment identity, quantity, package count, net/gross weights and
+package dimensions reconcile before recording. The observation pins the packing
+hash/revision and freight event; a stale or unreviewed revision is rejected.
+`UNKNOWN` remains an unresolved observation, and replay of either outcome
+returns the same event while a second operation key cannot create another
+booking observation. This never invokes a carrier.
 
 `ExecuteDocuments` creates versioned draft commercial invoices, packing lists
 and document checklists. Invoice review requires legal-party and tax-review

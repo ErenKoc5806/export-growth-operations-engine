@@ -36,19 +36,53 @@ class ExecuteOperations:
             prior = db.execute("SELECT * FROM execute_operation_event WHERE operation_key = ?",
                                (operation_key,)).fetchone()
             if prior:
-                if (prior["order_id"], prior["kind"], prior["payload_sha256"]) != (
-                        order_id, kind, digest):
+                recorded = json.loads(prior["payload_json"])
+                same_payload = (all(recorded.get(key) == value for key, value in payload.items())
+                                if kind == "BOOKING_CONFIRMATION" else prior["payload_sha256"] == digest)
+                if (prior["order_id"] != order_id or prior["kind"] != kind or not same_payload):
                     raise ValueError("Operation key conflicts with prior event")
                 return prior["sequence"]
             order = self.orders._order(db, order_id)
             if order is None or order["status"] != "LOCAL_ORDER_SYNTHETIC":
                 raise ValueError("Current approved local order is required")
             if kind == "BOOKING_CONFIRMATION":
+                if db.execute("""SELECT 1 FROM execute_operation_event
+                    WHERE order_id = ? AND kind = 'BOOKING_CONFIRMATION'""",
+                    (order_id,)).fetchone():
+                    raise ValueError("Booking observation already recorded; reconcile before another action")
                 plan = self._latest(db, order_id, "FREIGHT_PLAN")
                 readiness = self._latest(db, order_id, "READINESS")
                 if (plan is None or plan["payload"]["status"] != "REQUESTED"
                         or readiness is None or readiness["payload"]["status"] != "READY"):
                     raise ValueError("Requested freight plan and confirmed readiness required")
+                packing = db.execute("""SELECT r.*, d.order_id FROM execute_document d
+                    JOIN execute_document_revision r ON r.document_id = d.id
+                    WHERE d.order_id = ? AND d.kind = 'PACKING'
+                    ORDER BY r.revision DESC LIMIT 1""", (order_id,)).fetchone()
+                if packing is None:
+                    raise ValueError("Current reviewed packing list required for booking")
+                reviewed = db.execute("""SELECT decision FROM execute_document_decision
+                    WHERE document_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
+                    (packing["document_id"], packing["revision"])).fetchone()
+                packed = json.loads(packing["payload_json"])
+                dimensions = "; ".join(x["dimensions"] for x in packed["packages"])
+                if (reviewed is None or reviewed["decision"] != "REVIEW"
+                        or packing["order_sha256"] != order["payload_sha256"]
+                        or packing["freight_sequence"] != plan["sequence"]
+                        or packed["order_id"] != order_id
+                        or Decimal(packed["quantity"]) != Decimal(order["payload"]["quantity"])
+                        or Decimal(readiness["payload"]["quantity"]) != Decimal(packed["quantity"])
+                        or packed["package_count"] != plan["payload"]["packages"]
+                        or Decimal(packed["net_weight_kg"]) != Decimal(plan["payload"]["net_weight_kg"])
+                        or Decimal(packed["gross_weight_kg"]) != Decimal(plan["payload"]["gross_weight_kg"])
+                        or dimensions != plan["payload"]["dimensions"]):
+                    raise ValueError("Packing review, shipment and latest freight plan must reconcile")
+                payload["shipment_id"] = order_id
+                payload["packing_document_id"] = packing["document_id"]
+                payload["packing_revision"] = packing["revision"]
+                payload["packing_sha256"] = packing["payload_sha256"]
+                payload["freight_sequence"] = plan["sequence"]
+                digest = hashlib.sha256(_json(payload).encode()).hexdigest()
             cur = db.execute("""INSERT INTO execute_operation_event
                 (operation_key, order_id, kind, payload_json, payload_sha256,
                  actor_id, recorded_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -170,12 +204,14 @@ class ExecuteOperations:
 
     def confirm_booking(self, order_id: str, *, operation_key: str,
                         confirmation_ref: str, source_ref: str,
-                        confirmed_at_utc: str) -> int:
+                        confirmed_at_utc: str, outcome: str = "CONFIRMED_SYNTHETIC") -> int:
         confirmation = _text(confirmation_ref, "carrier confirmation", 300)
         source = _text(source_ref, "carrier evidence", 300)
         if not confirmation.startswith("SYN-") or not source.startswith("SYN-"):
             raise ValueError("Only synthetic carrier evidence is supported")
-        payload = {"status": "CONFIRMED_SYNTHETIC", "confirmation_ref": confirmation,
+        if outcome not in ("CONFIRMED_SYNTHETIC", "UNKNOWN"):
+            raise ValueError("Only synthetic confirmation or unknown observation is supported")
+        payload = {"status": outcome, "confirmation_ref": confirmation,
                    "source_ref": source, "confirmed_at_utc": _time(confirmed_at_utc),
                    "real_carrier_booking": False}
         return self._record(order_id, operation_key, "BOOKING_CONFIRMATION", payload)
