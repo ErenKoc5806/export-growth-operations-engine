@@ -91,16 +91,24 @@ class OperatorCLITests(unittest.TestCase):
                  status="REQUESTED", pickup="Example factory", delivery="Example city",
                  packages=1, net_weight_kg="100", gross_weight_kg="120",
                  dimensions="100 x 40 x 30 cm", requested_at_utc="2026-11-03T00:00:00Z")
-        invoice_id, _ = self.act("invoice-draft", order_id=order_id,
-                                 exporter_legal_id="SYN-TR-123", buyer_legal_id="SYN-DE-456",
-                                 tax_review_ref="SYN-TAX-REVIEW")
         packing_id, _ = self.act("packing-draft", order_id=order_id, marks="SYN-MARK",
                                  packages=[{"quantity": "150", "net_weight_kg": "100",
                                             "gross_weight_kg": "120", "dimensions": "100 x 40 x 30 cm"}])
+        packing = self.show("document", packing_id)
+        self.act("document-review", document_id=packing_id, revision=1,
+                 decision="REVIEW", expected_payload_sha256=packing["payload_sha256"],
+                 reason="Invented packing reviewed")
+        self.act("export-facts-review", order_id=order_id, hs_code="732690",
+                 classification_evidence_ref="SYN-HS", origin_country_code="TR",
+                 origin_evidence_ref="SYN-ORIGIN", manufacturer_review_ref="SYN-MFG")
+        invoice_id, _ = self.act("invoice-draft", order_id=order_id,
+                                 exporter_legal_id="SYN-TR-123", buyer_legal_id="SYN-DE-456",
+                                 tax_review_ref="SYN-TAX-REVIEW",
+                                 destination_review_ref="SYN-DE-REVIEW")
         checklist_id, _ = self.act("checklist-draft", order_id=order_id,
                                    items=[{"name": "Origin evidence", "status": "NOT_REQUIRED",
                                            "owner": "Operator", "evidence_ref": "SYN-REVIEW"}])
-        for document_id in (invoice_id, packing_id, checklist_id):
+        for document_id in (invoice_id, checklist_id):
             record = self.show("document", document_id)
             self.act("document-review", document_id=document_id, revision=1,
                      decision="REVIEW", expected_payload_sha256=record["payload_sha256"],

@@ -24,8 +24,14 @@ Freight requests require package count, weights and dimensions.
 
 `ExecuteDocuments` creates versioned draft commercial invoices, packing lists
 and document checklists. Invoice review requires legal-party and tax-review
-references. Packing quantities and weights must reconcile to the order and
-current freight plan; a changed plan stales the old review. Checklist items
+references plus a destination-specific requirements review. The operator records
+manufacturer-reviewed HS classification and country of origin with distinct
+synthetic evidence and reviewer identity. The research HS filter and seller
+address never supply these facts. Packing quantities and weights must reconcile
+to the order and current freight plan; a changed plan stales the old review.
+The invoice copies net/gross weights only from the currently reviewed packing
+revision and binds the packing hash and export-fact sequence. Changing either
+makes the invoice require a new revision and review. Checklist items
 retain `REQUIRED`, `NOT_REQUIRED` or `UNKNOWN` and their operator evidence.
 Review means only a **reviewed synthetic draft**. No issued original is produced.
 `case_summary` links the RFQ, quote, PO, order, operations and document versions,

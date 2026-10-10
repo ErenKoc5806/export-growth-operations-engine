@@ -37,6 +37,7 @@ MIGRATION_FILES = (
     "023_execute_documents.sql",
     "024_execute_metrics.sql",
     "025_inbound_opt_out.sql",
+    "026_export_facts.sql",
 )
 
 
