@@ -28,6 +28,7 @@ from pilot_engine.quotations import Quotations
 from pilot_engine.rfq import SellRFQ
 from pilot_engine.sell_delivery import CaptureMailbox, SellDelivery
 from pilot_engine.sell_drafts import SellDrafts
+from pilot_engine.synthetic_demo import create_demo_handoff
 
 
 def _h(value: object) -> str:
@@ -491,9 +492,15 @@ def _dashboard(app: OperatorWeb) -> bytes:
                      + "<span class='badge'>SENTETİK</span></p>"
                      + "<a class='button' href='/case?id=" + _h(handoff["id"])
                      + "'>Vakayı aç</a></div>")
+    demo = ("<div class='card'><h3>İlk deneme</h3><p>Gerçek veri girmeden tüm akışı "
+            "denemek için uydurma bir örnek vaka hazırlayın.</p>"
+            "<form method='post' action='/demo'><input type='hidden' name='csrf' value='"
+            + _h(app.csrf) + "'><label class='check'><input type='checkbox' name='confirm' "
+            "value='yes' required>Verilerin tamamen örnek olduğunu anlıyorum.</label>"
+            "<button>Örnek vakayı başlat</button></form></div>")
     return _layout("<h2>Find devirleri</h2><p class='muted'>Bir vakayı seçerek ekrandaki "
                    "adımları ilerletin. ID veya JSON girmeniz gerekmez.</p>"
-                   + ("".join(cards) if cards else
+                   + demo + ("".join(cards) if cards else
                       "<div class='card'>Henüz sentetik Find devri yok. Ürün, alıcı uygunluğu "
                       "ve rota kanıtı hazırlığı mevcut Find servislerinde yapılır.</div>"))
 
@@ -679,6 +686,12 @@ def make_handler(app: OperatorWeb):
                                             self.rfile.read(length))
                 if not secrets.compare_digest(values.get("csrf", ""), app.csrf):
                     self._send(HTTPStatus.FORBIDDEN, b"")
+                    return
+                if parsed.path == "/demo":
+                    if values.get("confirm") != "yes":
+                        raise ValueError("Örnek vaka için açık onay gerekli")
+                    handoff_id = create_demo_handoff(app.store)
+                    self._send(HTTPStatus.SEE_OTHER, b"", location="/case?id=" + handoff_id)
                     return
                 handoff_id = self._case_id()
                 case = app.chain(handoff_id)
