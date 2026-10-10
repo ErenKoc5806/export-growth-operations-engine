@@ -29,6 +29,10 @@ operator-recorded goods readiness and freight plans, and versioned invoice,
 packing-list and shipping-checklist drafts. Its technical case status does not
 claim a real customer PO, ERP order, carrier booking, issued document or shipment.
 
+The [pilot operator console](docs/operator-console.md) presents current records,
+reviewable JSON forms and explicitly confirmed synthetic actions from a Find
+handoff through Sell and Execute, without direct Python calls.
+
 | Path | Repository | Current role |
 | --- | --- | --- |
 | `components/ai-worker` | [AI-Worker](https://github.com/ErenKoc5806/AI-Worker) | Candidate PO and operations functions; not integrated |
