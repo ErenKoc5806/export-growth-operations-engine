@@ -162,10 +162,23 @@ class ExecuteOrder:
         decision = db.execute("""SELECT decision FROM execute_po_decision
             WHERE po_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
             (po_id, row["revision"])).fetchone()
-        result["status"] = ("REVIEW_REQUIRED" if result["differences"] or not result["quote_current"]
-                            else "APPROVED_SYNTHETIC" if decision and decision["decision"] == "APPROVE"
-                            else "REVOKED" if decision and decision["decision"] == "REVOKE"
-                            else "DRAFT")
+        order = db.execute("SELECT po_revision, payload_json FROM execute_local_order WHERE po_id = ?",
+                           (po_id,)).fetchone()
+        result["historical_order_approval"] = (order is not None and
+                                               order["po_revision"] == row["revision"] and
+                                               json.loads(order["payload_json"]).get(
+                                                   "po_payload_sha256", row["payload_sha256"]) ==
+                                               row["payload_sha256"])
+        if decision and decision["decision"] == "REVOKE":
+            result["status"] = "REVOKED"
+        elif decision and decision["decision"] == "APPROVE" and result["historical_order_approval"]:
+            result["status"] = "APPROVED_SYNTHETIC"
+        elif result["differences"] or not result["quote_current"]:
+            result["status"] = "REVIEW_REQUIRED"
+        elif decision and decision["decision"] == "APPROVE":
+            result["status"] = "APPROVED_SYNTHETIC"
+        else:
+            result["status"] = "DRAFT"
         result["real_customer_po"] = False
         return result
 
@@ -200,10 +213,17 @@ class ExecuteOrder:
                  actor, _utc_now()))
             if decision == "REVOKE":
                 return cur.lastrowid
+            quote_approval = db.execute("""SELECT decision, decided_at_utc FROM sell_quotation_decision
+                WHERE quotation_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
+                (po["quotation_id"], po["quotation_revision"])).fetchone()
+            if quote_approval is None or quote_approval["decision"] != "APPROVE":
+                raise ValueError("Effective quotation approval required")
             order_id = f"EO-{uuid4()}"
             snapshot = {**po["payload"], "po_id": po_id, "po_revision": revision,
+                        "po_payload_sha256": po["payload_sha256"],
                         "quotation_id": po["quotation_id"],
-                        "quotation_revision": po["quotation_revision"]}
+                        "quotation_revision": po["quotation_revision"],
+                        "quote_approved_at_utc": quote_approval["decided_at_utc"]}
             digest = hashlib.sha256(_json(snapshot).encode()).hexdigest()
             db.execute("""INSERT INTO execute_local_order
                 (id, po_id, po_revision, payload_json, payload_sha256, actor_id, created_at_utc)

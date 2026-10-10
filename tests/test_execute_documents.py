@@ -1,4 +1,6 @@
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from pilot_engine.execute_documents import ExecuteDocuments
 import test_execute_operations
@@ -69,6 +71,16 @@ class ExecuteDocumentsTests(unittest.TestCase):
         self.assertEqual(case["find_to_sell"]["candidate_name"], "Example Buyer")
         self.assertFalse(case["manufacturer_documents_released"])
         self.assertFalse(case["physical_shipment_completed"])
+
+        class AfterExpiry(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2031, 1, 1, tzinfo=timezone.utc)
+
+        with patch("pilot_engine.quotations.datetime", AfterExpiry):
+            self.assertEqual(self.quotes.read(self.quote_id)["status"], "EXPIRED")
+            self.assertTrue(self.documents.case_summary(self.order_id)["technical_case_accepted"])
+            self.assertEqual(self.documents.read(invoice_id)["status"], "REVIEWED_SYNTHETIC")
 
     def test_packing_mismatch_and_changed_freight_stales_review(self):
         with self.assertRaisesRegex(ValueError, "reconcile"):

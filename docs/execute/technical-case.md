@@ -5,8 +5,11 @@ synthetic PO source and original-document SHA-256 to a versioned, independently
 entered PO snapshot. `read` lists missing or conflicting buyer, seller, product,
 quantity, price, total and delivery terms. `decide(..., "APPROVE")` requires the
 exact current PO hash and quote revision, then creates one immutable local order.
-Replay returns the same order ID. A changed or revoked quote makes the order
-review-required; a created order cannot be silently replaced by a corrected PO.
+Replay returns the same order ID. Before PO approval, an expired, changed or
+revoked quotation blocks the order. Once accepted, the order retains its exact
+PO hash, quotation revision and quote-approval timestamp; later quote expiry
+does not suspend fulfillment. A PO decision revocation still makes the order
+review-required, and a created order cannot be silently replaced by a corrected PO.
 The original PO bytes are **hashed, not stored**; the source reference must be
 retained by the operator. Only `SYN-` evidence is accepted in this slice.
 
