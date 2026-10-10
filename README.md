@@ -32,6 +32,9 @@ claim a real customer PO, ERP order, carrier booking, issued document or shipmen
 The [pilot operator console](docs/operator-console.md) presents current records,
 reviewable JSON forms and explicitly confirmed synthetic actions from a Find
 handoff through Sell and Execute, without direct Python calls.
+The [visual operator workspace](docs/operator-web.md) adds a local browser flow
+with guided forms and buttons for the same synthetic path; it remains disabled
+in pilot mode pending the reviewed live-data gate.
 
 | Path | Repository | Current role |
 | --- | --- | --- |
