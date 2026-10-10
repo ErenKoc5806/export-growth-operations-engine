@@ -59,7 +59,7 @@ class InboundResponseTests(unittest.TestCase):
         self.assertEqual(view["classification"], "RFQ_CANDIDATE")
         self.assertFalse(view["rfq_created"])
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 20)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 24)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_inbound_review SET classification = 'REJECTION'")
 

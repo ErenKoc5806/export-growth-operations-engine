@@ -32,6 +32,10 @@ MIGRATION_FILES = (
     "018_inbound_responses.sql",
     "019_sell_rfq.sql",
     "020_sell_quotation.sql",
+    "021_execute_order.sql",
+    "022_execute_operations.sql",
+    "023_execute_documents.sql",
+    "024_execute_metrics.sql",
 )
 
 

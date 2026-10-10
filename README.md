@@ -23,6 +23,12 @@ and complete product requirements before a synthetic quote can begin.
 commercial terms to an accepted synthetic RFQ; they cannot be sent or accepted
 as a live customer offer.
 
+Execute now has a [synthetic PO-to-document workflow](docs/execute/technical-case.md):
+exact quote/PO reconciliation, an idempotent local order, manual ERP handoff,
+operator-recorded goods readiness and freight plans, and versioned invoice,
+packing-list and shipping-checklist drafts. Its technical case status does not
+claim a real customer PO, ERP order, carrier booking, issued document or shipment.
+
 | Path | Repository | Current role |
 | --- | --- | --- |
 | `components/ai-worker` | [AI-Worker](https://github.com/ErenKoc5806/AI-Worker) | Candidate PO and operations functions; not integrated |
