@@ -68,6 +68,7 @@ ACTIONS = {
     "booking-record": (ExecuteOperations, "confirm_booking", "operations", "order_id"),
     "invoice-draft": (ExecuteDocuments, "invoice", "order", "order_id"),
     "packing-draft": (ExecuteDocuments, "packing", "operations", "order_id"),
+    "export-facts-review": (ExecuteDocuments, "review_export_facts", "order", "order_id"),
     "checklist-draft": (ExecuteDocuments, "checklist", "order", "order_id"),
     "document-review": (ExecuteDocuments, "review", "document", "document_id"),
     "metric-record": (ExecuteDocuments, "record_case_metric", "case", "order_id"),

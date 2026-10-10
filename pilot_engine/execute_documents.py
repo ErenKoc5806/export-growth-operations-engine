@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from contextlib import closing
 from decimal import Decimal
 from uuid import uuid4
@@ -18,6 +19,39 @@ class ExecuteDocuments:
     def __init__(self, store: PilotStore):
         self.store = store
         self.operations = ExecuteOperations(store)
+
+    def review_export_facts(self, order_id: str, *, hs_code: str,
+                            classification_evidence_ref: str,
+                            origin_country_code: str, origin_evidence_ref: str,
+                            manufacturer_review_ref: str) -> int:
+        actor = self.store._require_access("APPROVE_EXECUTE", order_id)
+        if not isinstance(hs_code, str) or not re.fullmatch(r"[0-9]{6}([0-9]{2})?([0-9]{2})?", hs_code):
+            raise ValueError("Reviewed HS classification needs 6, 8 or 10 digits")
+        if (not isinstance(origin_country_code, str) or
+                not re.fullmatch(r"[A-Z]{2}", origin_country_code)):
+            raise ValueError("Reviewed origin needs an ISO country code")
+        for ref in (classification_evidence_ref, origin_evidence_ref, manufacturer_review_ref):
+            if not _text(ref, "manufacturer export evidence", 300).startswith("SYN-"):
+                raise ValueError("Only synthetic reviewed export evidence is supported")
+        with self.store._transaction() as db:
+            order = self.operations.orders._order(db, order_id)
+            if order is None or order["status"] != "LOCAL_ORDER_SYNTHETIC":
+                raise ValueError("Current approved order required")
+            values = (order_id, order["payload_sha256"], hs_code,
+                      classification_evidence_ref, origin_country_code,
+                      origin_evidence_ref, manufacturer_review_ref)
+            prior = db.execute("""SELECT * FROM execute_export_fact WHERE order_id = ?
+                ORDER BY sequence DESC LIMIT 1""", (order_id,)).fetchone()
+            if prior and tuple(prior[k] for k in ("order_id", "order_sha256", "hs_code",
+                    "classification_evidence_ref", "origin_country_code",
+                    "origin_evidence_ref", "manufacturer_review_ref")) == values:
+                return prior["sequence"]
+            cur = db.execute("""INSERT INTO execute_export_fact
+                (order_id, order_sha256, hs_code, classification_evidence_ref,
+                 origin_country_code, origin_evidence_ref, manufacturer_review_ref,
+                 actor_id, reviewed_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*values, actor, _utc_now()))
+            return cur.lastrowid
 
     def _save(self, order_id: str, kind: str, payload: dict, *,
               freight_sequence: int | None = None,
@@ -58,6 +92,7 @@ class ExecuteDocuments:
 
     def invoice(self, order_id: str, *, exporter_legal_id: str | None,
                 buyer_legal_id: str | None, tax_review_ref: str | None,
+                destination_review_ref: str | None = None,
                 document_id: str | None = None, expected_revision: int = 0) -> tuple[str, int]:
         self.store._require_access("EDIT_EXECUTE", order_id)
         with closing(self.store._connect()) as db:
@@ -67,9 +102,16 @@ class ExecuteDocuments:
             po = order["payload"]
             source = db.execute("SELECT source_ref FROM execute_po WHERE id = ?",
                                 (po["po_id"],)).fetchone()[0]
-        for value in (exporter_legal_id, buyer_legal_id, tax_review_ref):
+            facts = db.execute("""SELECT * FROM execute_export_fact WHERE order_id = ?
+                ORDER BY sequence DESC LIMIT 1""", (order_id,)).fetchone()
+            packing_id = db.execute("""SELECT id FROM execute_document WHERE order_id = ?
+                AND kind = 'PACKING'""", (order_id,)).fetchone()
+            packing = self._read(db, packing_id["id"]) if packing_id else None
+        for value in (exporter_legal_id, buyer_legal_id, tax_review_ref, destination_review_ref):
             if value is not None:
                 _text(value, "invoice legal/tax reference", 300)
+        if destination_review_ref is not None and not destination_review_ref.startswith("SYN-"):
+            raise ValueError("Only synthetic destination requirements review is supported")
         payload = {"type": "COMMERCIAL_INVOICE_DRAFT", "order_id": order_id,
                    "po_id": po["po_id"], "po_source_ref": source,
                    "buyer": po["buyer"], "seller": po["seller"],
@@ -80,6 +122,17 @@ class ExecuteDocuments:
                    "incoterm_place": po["incoterm_place"],
                    "exporter_legal_id": exporter_legal_id,
                    "buyer_legal_id": buyer_legal_id, "tax_review_ref": tax_review_ref,
+                   "destination_review_ref": destination_review_ref,
+                   "hs_code": facts["hs_code"] if facts else None,
+                   "classification_evidence_ref": facts["classification_evidence_ref"] if facts else None,
+                   "origin_country_code": facts["origin_country_code"] if facts else None,
+                   "origin_evidence_ref": facts["origin_evidence_ref"] if facts else None,
+                   "manufacturer_review_ref": facts["manufacturer_review_ref"] if facts else None,
+                   "export_fact_sequence": facts["sequence"] if facts else None,
+                   "packing_revision": packing["revision"] if packing else None,
+                   "packing_sha256": packing["payload_sha256"] if packing else None,
+                   "net_weight_kg": packing["payload"]["net_weight_kg"] if packing else None,
+                   "gross_weight_kg": packing["payload"]["gross_weight_kg"] if packing else None,
                    "issued_original": False, "data_origin": "SYNTHETIC"}
         return self._save(order_id, "INVOICE", payload,
                           document_id=document_id, expected_revision=expected_revision)
@@ -163,11 +216,28 @@ class ExecuteDocuments:
         if row["kind"] == "PACKING":
             freight = self.operations._latest(db, row["order_id"], "FREIGHT_PLAN")
             current = current and freight is not None and freight["sequence"] == row["freight_sequence"]
+        if row["kind"] == "INVOICE":
+            facts = db.execute("""SELECT * FROM execute_export_fact WHERE order_id = ?
+                ORDER BY sequence DESC LIMIT 1""", (row["order_id"],)).fetchone()
+            packing_id = db.execute("""SELECT id FROM execute_document WHERE order_id = ?
+                AND kind = 'PACKING'""", (row["order_id"],)).fetchone()
+            packing = self._read(db, packing_id["id"]) if packing_id else None
+            current = (current and facts is not None and
+                       result["payload"].get("export_fact_sequence") == facts["sequence"] and
+                       facts["order_sha256"] == row["order_sha256"] and
+                       packing is not None and packing["status"] == "REVIEWED_SYNTHETIC" and
+                       result["payload"].get("packing_revision") == packing["revision"] and
+                       result["payload"].get("packing_sha256") == packing["payload_sha256"] and
+                       result["payload"].get("net_weight_kg") == packing["payload"]["net_weight_kg"] and
+                       result["payload"].get("gross_weight_kg") == packing["payload"]["gross_weight_kg"])
         decision = db.execute("""SELECT decision FROM execute_document_decision
             WHERE document_id = ? AND revision = ? ORDER BY sequence DESC LIMIT 1""",
             (document_id, row["revision"])).fetchone()
         result["missing_review_inputs"] = (
-            [key for key in ("exporter_legal_id", "buyer_legal_id", "tax_review_ref")
+            [key for key in ("exporter_legal_id", "buyer_legal_id", "tax_review_ref",
+                             "destination_review_ref", "hs_code", "classification_evidence_ref",
+                             "origin_country_code", "origin_evidence_ref", "manufacturer_review_ref",
+                             "net_weight_kg", "gross_weight_kg")
              if not result["payload"].get(key)] if row["kind"] == "INVOICE" else
             ["unknown_documents"] if row["kind"] == "CHECKLIST" and any(
                 x["status"] == "UNKNOWN" for x in result["payload"]["items"]) else [])

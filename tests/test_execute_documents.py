@@ -37,19 +37,26 @@ class ExecuteDocumentsTests(unittest.TestCase):
                                   expected_payload_sha256=view["payload_sha256"],
                                   reason="Missing legal inputs")
         self.assertFalse(self.documents.case_summary(self.order_id)["technical_case_accepted"])
-        self.documents.invoice(self.order_id, document_id=invoice_id, expected_revision=1,
-                               exporter_legal_id="SYN-TR-123", buyer_legal_id="SYN-DE-456",
-                               tax_review_ref="SYN-TAX-REVIEW")
-        invoice = self.documents.read(invoice_id)
-        self.documents.review(invoice_id, 2, decision="REVIEW",
-                              expected_payload_sha256=invoice["payload_sha256"],
-                              reason="Reviewed invented legal and tax fields")
         packing_id, _ = self.documents.packing(self.order_id, packages=self.package,
                                                marks="SYN-MARK-1")
         packing = self.documents.read(packing_id)
         self.documents.review(packing_id, 1, decision="REVIEW",
                               expected_payload_sha256=packing["payload_sha256"],
                               reason="Reviewed packing totals")
+        self.documents.review_export_facts(self.order_id, hs_code="732690",
+            classification_evidence_ref="SYN-HS-REVIEW", origin_country_code="TR",
+            origin_evidence_ref="SYN-ORIGIN-REVIEW",
+            manufacturer_review_ref="SYN-MFG-REVIEW")
+        self.documents.invoice(self.order_id, document_id=invoice_id, expected_revision=1,
+                               exporter_legal_id="SYN-TR-123", buyer_legal_id="SYN-DE-456",
+                               tax_review_ref="SYN-TAX-REVIEW",
+                               destination_review_ref="SYN-DE-REVIEW")
+        invoice = self.documents.read(invoice_id)
+        self.assertEqual((invoice["payload"]["hs_code"], invoice["payload"]["origin_country_code"],
+                          invoice["payload"]["net_weight_kg"]), ("732690", "TR", "100"))
+        self.documents.review(invoice_id, 2, decision="REVIEW",
+                              expected_payload_sha256=invoice["payload_sha256"],
+                              reason="Reviewed invented legal and tax fields")
         checklist_id, _ = self.documents.checklist(self.order_id, items=[
             {"name": "Origin evidence", "status": "NOT_REQUIRED", "owner": "Operator",
              "evidence_ref": "SYN-CORRIDOR-REVIEW"}])
@@ -99,6 +106,44 @@ class ExecuteDocumentsTests(unittest.TestCase):
                                      dimensions="100 x 40 x 30 cm", **self.plan)
         self.assertEqual(self.documents.read(packing_id)["status"], "REVIEW_REQUIRED")
         self.assertFalse(self.documents.case_summary(self.order_id)["technical_case_accepted"])
+
+    def test_invoice_stales_on_export_fact_or_packing_revision(self):
+        packing_id, _ = self.documents.packing(self.order_id, packages=self.package, marks="SYN-MARK")
+        packing = self.documents.read(packing_id)
+        self.documents.review(packing_id, 1, decision="REVIEW",
+            expected_payload_sha256=packing["payload_sha256"], reason="Invented packing evidence")
+        args = dict(hs_code="732690", classification_evidence_ref="SYN-HS-REVIEW",
+            origin_country_code="TR", origin_evidence_ref="SYN-ORIGIN",
+            manufacturer_review_ref="SYN-MFG")
+        seq = self.documents.review_export_facts(self.order_id, **args)
+        self.assertEqual(self.documents.review_export_facts(self.order_id, **args), seq)
+        common = dict(exporter_legal_id="SYN-TR", buyer_legal_id="SYN-DE",
+                      tax_review_ref="SYN-TAX", destination_review_ref="SYN-DE-LEGAL")
+        invoice_id, _ = self.documents.invoice(self.order_id, **common)
+        invoice = self.documents.read(invoice_id)
+        self.documents.review(invoice_id, 1, decision="REVIEW",
+            expected_payload_sha256=invoice["payload_sha256"], reason="Synthetic invoice review")
+        self.assertEqual(self.documents.read(invoice_id)["status"], "REVIEWED_SYNTHETIC")
+        self.documents.review_export_facts(self.order_id, **{**args,
+            "classification_evidence_ref": "SYN-HS-CORRECTED"})
+        self.assertEqual(self.documents.read(invoice_id)["status"], "REVIEW_REQUIRED")
+        self.documents.invoice(self.order_id, document_id=invoice_id, expected_revision=1, **common)
+        revised = self.documents.read(invoice_id)
+        self.documents.review(invoice_id, 2, decision="REVIEW",
+            expected_payload_sha256=revised["payload_sha256"], reason="Updated classification")
+        self.documents.packing(self.order_id, packages=self.package, marks="SYN-NEW-MARK",
+                               document_id=packing_id, expected_revision=1)
+        self.assertEqual(self.documents.read(invoice_id)["status"], "REVIEW_REQUIRED")
+
+    def test_export_evidence_is_explicit_and_synthetic(self):
+        with self.assertRaisesRegex(ValueError, "classification"):
+            self.documents.review_export_facts(self.order_id, hs_code="73",
+                classification_evidence_ref="SYN-HS", origin_country_code="TR",
+                origin_evidence_ref="SYN-ORIGIN", manufacturer_review_ref="SYN-MFG")
+        with self.assertRaisesRegex(ValueError, "synthetic"):
+            self.documents.review_export_facts(self.order_id, hs_code="732690",
+                classification_evidence_ref="real-document", origin_country_code="TR",
+                origin_evidence_ref="SYN-ORIGIN", manufacturer_review_ref="SYN-MFG")
 
 
 if __name__ == "__main__":

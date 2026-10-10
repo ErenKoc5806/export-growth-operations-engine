@@ -113,6 +113,9 @@ class OperatorWeb:
                          if ids["quote"] else None)
             ids["order"] = (_first(db, "SELECT id FROM execute_local_order WHERE po_id = ?",
                                    ids["po"]) if ids["po"] else None)
+            ids["export_facts"] = (_first(db, "SELECT sequence FROM execute_export_fact "
+                "WHERE order_id = ? ORDER BY sequence DESC LIMIT 1", ids["order"])
+                if ids["order"] else None)
             ids["documents"] = ({row["kind"].lower(): row["id"] for row in db.execute(
                 "SELECT kind, id FROM execute_document WHERE order_id = ?", (ids["order"],))}
                                 if ids["order"] else {})
@@ -190,7 +193,13 @@ class OperatorWeb:
                            ("freight_plan", "freight")):
             if operations[kind] is None:
                 return step
-        for kind in ("invoice", "packing", "checklist"):
+        if "packing" not in case["documents"]:
+            return "packing"
+        if case["documents"]["packing"]["status"] != "REVIEWED_SYNTHETIC":
+            return "review-packing"
+        if not ids["export_facts"]:
+            return "export-facts"
+        for kind in ("invoice", "checklist"):
             if kind not in case["documents"]:
                 return kind
             if case["documents"][kind]["status"] != "REVIEWED_SYNTHETIC":
@@ -228,6 +237,7 @@ TITLES = {
     "approve-po": "PO'yu inceleyip yerel siparişi aç", "erp": "ERP için manuel devir kaydet",
     "readiness": "Mal hazırlık durumunu kaydet", "freight": "Navlun talebini planla",
     "invoice": "Fatura taslağı", "packing": "Paketleme taslağı",
+    "export-facts": "İhracat bilgilerini incele",
     "checklist": "Sevkiyat belge listesi", "review-invoice": "Fatura taslağını incele",
     "review-packing": "Paketleme taslağını incele",
     "review-checklist": "Belge listesini incele", "blocked": "İnceleme gerekli",
@@ -325,7 +335,15 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         fields += _field("exporter_legal_id", "İhracatçı yasal kayıt referansı", "SYN-TR-123")
         fields += _field("buyer_legal_id", "Alıcı yasal kayıt referansı", "SYN-DE-456")
         fields += _field("tax_review_ref", "Vergi inceleme referansı", "SYN-TAX-REVIEW")
+        fields += _field("destination_review_ref", "Hedef ülke fatura gereklilikleri incelemesi", "SYN-DE-INVOICE-REVIEW")
         evidence = "Ticari fatura taslağıdır; düzenlenmiş yasal fatura değildir."
+    elif step == "export-facts":
+        fields += _field("hs_code", "Üretici tarafından incelenmiş HS kodu", "732690")
+        fields += _field("classification_evidence_ref", "Sınıflandırma kanıtı", "SYN-HS-REVIEW")
+        fields += _field("origin_country_code", "Menşe ülke kodu", "TR")
+        fields += _field("origin_evidence_ref", "Menşe kanıtı", "SYN-ORIGIN-REVIEW")
+        fields += _field("manufacturer_review_ref", "Üretici inceleme referansı", "SYN-MFG-REVIEW")
+        evidence = "Araştırma için kullanılan GTİP otomatik olarak doğrulanmış sınıflandırma sayılmaz. Menşe de satıcı adresinden çıkarılamaz."
     elif step == "packing":
         plan = case["case"]["operations"]["freight_plan"]["payload"]
         fields += _field("quantity", "Paketteki toplam miktar", case["case"]["operations"]["order"]["payload"]["quantity"])
@@ -454,7 +472,14 @@ def _execute(case: dict, step: str, values: dict[str, str], files: dict[str, byt
             requested_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     elif step == "invoice":
         ExecuteDocuments(store).invoice(ids["order"], exporter_legal_id=required("exporter_legal_id"),
-            buyer_legal_id=required("buyer_legal_id"), tax_review_ref=required("tax_review_ref"))
+            buyer_legal_id=required("buyer_legal_id"), tax_review_ref=required("tax_review_ref"),
+            destination_review_ref=required("destination_review_ref"))
+    elif step == "export-facts":
+        ExecuteDocuments(store).review_export_facts(ids["order"], hs_code=required("hs_code"),
+            classification_evidence_ref=required("classification_evidence_ref"),
+            origin_country_code=required("origin_country_code"),
+            origin_evidence_ref=required("origin_evidence_ref"),
+            manufacturer_review_ref=required("manufacturer_review_ref"))
     elif step == "packing":
         ExecuteDocuments(store).packing(ids["order"], marks=required("marks"), packages=[{
             key: required(key) for key in ("quantity", "net_weight_kg", "gross_weight_kg", "dimensions")}])

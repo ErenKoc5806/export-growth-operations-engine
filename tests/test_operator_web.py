@@ -61,13 +61,17 @@ class OperatorWebTests(unittest.TestCase):
         self.advance("freight", {"pickup": "Example factory", "delivery": "Example city",
                                  "packages": "1", "net_weight_kg": "100",
                                  "gross_weight_kg": "120", "dimensions": "100 x 40 x 30 cm"})
-        self.advance("invoice", {"exporter_legal_id": "SYN-TR-123",
-                                 "buyer_legal_id": "SYN-DE-456", "tax_review_ref": "SYN-TAX"})
-        self.advance("review-invoice", {"reason": "Invented invoice review"})
         self.advance("packing", {"quantity": "150", "net_weight_kg": "100",
                                  "gross_weight_kg": "120", "dimensions": "100 x 40 x 30 cm",
                                  "marks": "SYN-MARK"})
         self.advance("review-packing", {"reason": "Invented packing review"})
+        self.advance("export-facts", {"hs_code": "732690",
+            "classification_evidence_ref": "SYN-HS-REVIEW", "origin_country_code": "TR",
+            "origin_evidence_ref": "SYN-ORIGIN-REVIEW", "manufacturer_review_ref": "SYN-MFG"})
+        self.advance("invoice", {"exporter_legal_id": "SYN-TR-123",
+                                 "buyer_legal_id": "SYN-DE-456", "tax_review_ref": "SYN-TAX",
+                                 "destination_review_ref": "SYN-DE-INVOICE-REVIEW"})
+        self.advance("review-invoice", {"reason": "Invented invoice review"})
         self.advance("checklist", {"name": "Origin evidence", "status": "NOT_REQUIRED",
                                    "owner": "Example operator"})
         self.advance("review-checklist", {"reason": "Invented checklist review"})
