@@ -1,6 +1,8 @@
 import sqlite3
 import unittest
 from contextlib import closing
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from pilot_engine.execute_order import ExecuteOrder
 import test_quotations
@@ -65,6 +67,47 @@ class ExecuteOrderTests(unittest.TestCase):
             self.execute.decide(po_id, 1, "APPROVE",
                                 expected_payload_sha256=self.execute.read(po_id)["payload_sha256"],
                                 reason="Stale quote")
+
+    def test_expired_quote_does_not_invalidate_an_already_approved_order(self):
+        po_id, _ = self.execute.save(self.quote_id, payload=self.po, **self.inputs)
+        order_id = self.execute.decide(
+            po_id, 1, "APPROVE", expected_payload_sha256=self.execute.read(po_id)["payload_sha256"],
+            reason="Accepted before quote expiry")
+        self.assertTrue(self.execute.read_order(order_id)["payload"]["quote_approved_at_utc"])
+
+        class AfterExpiry(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2031, 1, 1, tzinfo=timezone.utc)
+
+        with patch("pilot_engine.quotations.datetime", AfterExpiry):
+            self.assertEqual(self.quotes.read(self.quote_id)["status"], "EXPIRED")
+            self.assertFalse(self.execute.read(po_id)["quote_current"])
+            self.assertTrue(self.execute.read(po_id)["historical_order_approval"])
+            self.assertEqual(self.execute.read_order(order_id)["status"], "LOCAL_ORDER_SYNTHETIC")
+            with self.assertRaisesRegex(ValueError, "approved synthetic quotation"):
+                self.execute.save(self.quote_id, payload=self.po,
+                                  **{**self.inputs, "source_ref": "SYN-LATE-PO"})
+        self.execute.decide(po_id, 1, "REVOKE",
+                            expected_payload_sha256=self.execute.read(po_id)["payload_sha256"],
+                            reason="Operator revoked accepted PO")
+        self.assertEqual(self.execute.read_order(order_id)["status"], "REVIEW_REQUIRED")
+
+    def test_expiry_before_po_approval_still_blocks_new_order(self):
+        po_id, _ = self.execute.save(self.quote_id, payload=self.po, **self.inputs)
+
+        class AfterExpiry(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2031, 1, 1, tzinfo=timezone.utc)
+
+        with patch("pilot_engine.quotations.datetime", AfterExpiry):
+            po = self.execute.read(po_id)
+            self.assertEqual(po["status"], "REVIEW_REQUIRED")
+            with self.assertRaisesRegex(ValueError, "stale quote"):
+                self.execute.decide(po_id, 1, "APPROVE",
+                                    expected_payload_sha256=po["payload_sha256"],
+                                    reason="Too late")
 
 
 if __name__ == "__main__":
