@@ -1,7 +1,9 @@
 import sqlite3
 import unittest
 from contextlib import closing
+from unittest.mock import patch
 
+from pilot_engine.find_handoff import FindHandoff
 from pilot_engine.inbound import InboundResponses
 from pilot_engine.sell_delivery import CaptureMailbox, SellDelivery
 from pilot_engine.store import PilotStore
@@ -59,7 +61,7 @@ class InboundResponseTests(unittest.TestCase):
         self.assertEqual(view["classification"], "RFQ_CANDIDATE")
         self.assertFalse(view["rfq_created"])
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 24)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 25)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_inbound_review SET classification = 'REJECTION'")
 
@@ -81,6 +83,66 @@ class InboundResponseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "synthetic"):
             self.inbound.record_inbound(source_ref="real", raw_ref="real-mailbox",
                                         received_at_utc="2026-10-06T02:00:00Z", channel="EMAIL")
+
+    def test_correlated_opt_out_suppresses_aliases_and_prior_handoff(self):
+        alias = self.routes.record(self.product_id, self.candidate_id,
+            kind="GENERIC_EMAIL", value="sales+legacy@example.org",
+            source_system="EXAMPLE_SITE", source_ref="CONTACT-1",
+            source_url="https://example.org/contact", observed_at_utc="2026-10-04T00:00:00Z")
+        attempt = self.capture()
+        inbound_id = self.inbound.record_inbound(source_ref="SYN-OPT-1", raw_ref="SYN-RAW-OPT-1",
+            received_at_utc="2026-10-06T03:00:00Z", channel="EMAIL",
+            provider_message_id=attempt["provider_message_id"])
+        fid = self.followups.schedule(self.opportunity, self.source, **self.args)
+        args = dict(classification="OPT_OUT", evidence_ref="SYN-RAW-OPT-1",
+                    explanation="Buyer requested no further contact")
+        first = self.inbound.review(inbound_id, self.opportunity, **args)
+        self.assertEqual(self.inbound.review(inbound_id, self.opportunity, **args), first)
+        self.assertEqual(self.inbound.read(inbound_id)["opt_out_status"], "SUPPRESSED")
+        self.assertEqual(self.routes.read(self.route_id)["status"], "SUPPRESSED")
+        self.assertEqual(self.routes.read(alias["id"])["status"], "SUPPRESSED")
+        self.assertEqual(FindHandoff(self.store).read(self.handoff_id)["status"], "REVIEW_REQUIRED")
+        self.assertEqual(self.followups.read(fid)["status"], "SUPPRESSED")
+        with self.assertRaisesRegex(ValueError, "suppressed"):
+            self.routes.record(self.product_id, self.candidate_id,
+                kind="GENERIC_EMAIL", value="sales+new@example.org",
+                source_system="EXAMPLE_SITE", source_ref="CONTACT-1",
+                source_url="https://example.org/contact", observed_at_utc="2026-10-07T00:00:00Z")
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM sell_inbound_opt_out WHERE inbound_id = ?",
+                                        (inbound_id,)).fetchone()[0], 2)
+            self.assertNotIn("sales@example.org", str(db.execute(
+                "SELECT * FROM sell_inbound_opt_out").fetchall()))
+
+    def test_uncorrelated_opt_out_blocks_all_routes_until_resolution(self):
+        inbound_id = self.inbound.record_inbound(source_ref="SYN-OPT-2", raw_ref="SYN-RAW-OPT-2",
+            received_at_utc="2026-10-06T03:00:00Z", channel="CONTACT_FORM")
+        fid = self.followups.schedule(self.opportunity, self.source, **self.args)
+        self.inbound.review(inbound_id, self.opportunity, classification="OPT_OUT",
+                            evidence_ref="SYN-RAW-OPT-2", explanation="Unmatched opt-out")
+        self.assertEqual(self.inbound.read(inbound_id)["opt_out_status"], "PENDING_SUPPRESSION")
+        self.assertEqual(FindHandoff(self.store).read(self.form_handoff)["status"], "REVIEW_REQUIRED")
+        self.assertEqual(self.followups.read(fid)["status"], "SUPPRESSED")
+        with self.assertRaisesRegex(ValueError, "Current Find handoff"):
+            self.manual.plan(self.opportunity, self.form_handoff,
+                             **{**self.plan_args, "operation_key": "after-opt-out"})
+        self.inbound.resolve_opt_out(inbound_id, self.form_id, explanation="Reviewed form source")
+        self.inbound.resolve_opt_out(inbound_id, self.form_id, explanation="Repeated resolution")
+        self.assertEqual(self.inbound.read(inbound_id)["opt_out_status"], "SUPPRESSED")
+        self.assertEqual(self.routes.read(self.form_id)["status"], "SUPPRESSED")
+        self.assertEqual(FindHandoff(self.store).read(self.handoff_id)["status"], "CURRENT_RESEARCH")
+
+    def test_suppression_failure_rolls_back_review(self):
+        attempt = self.capture()
+        inbound_id = self.inbound.record_inbound(source_ref="SYN-OPT-3", raw_ref="SYN-RAW-OPT-3",
+            received_at_utc="2026-10-06T03:00:00Z", channel="EMAIL",
+            provider_message_id=attempt["provider_message_id"])
+        with patch("pilot_engine.inbound.ContactRoutes._suppress", side_effect=RuntimeError("failure")):
+            with self.assertRaisesRegex(RuntimeError, "failure"):
+                self.inbound.review(inbound_id, self.opportunity, classification="OPT_OUT",
+                                    evidence_ref="SYN-RAW-OPT-3", explanation="Synthetic opt-out")
+        self.assertEqual(self.inbound.read(inbound_id)["classification"], "UNREVIEWED")
+        self.assertEqual(self.routes.read(self.route_id)["status"], "VERIFIED_ROUTE")
 
     def test_v17_upgrade_keeps_followup(self):
         fid = self.followups.schedule(self.opportunity, self.source, **self.args)

@@ -54,6 +54,7 @@ ACTIONS = {
     "manual-record": (ManualContact, "record", "manual-action", "action_id"),
     "inbound-record": (InboundResponses, "record_inbound", None, None),
     "inbound-review": (InboundResponses, "review", "inbound", "inbound_id"),
+    "opt-out-resolve": (InboundResponses, "resolve_opt_out", "inbound", "inbound_id"),
     "rfq-save": (SellRFQ, "save", "inbound", "inbound_id"),
     "rfq-decide": (SellRFQ, "decide", "rfq", "rfq_id"),
     "price-register": (Quotations, "register_price_authority", None, None),
