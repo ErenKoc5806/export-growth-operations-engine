@@ -72,6 +72,15 @@ def _route_ready(db: object, route: object) -> tuple[object, object]:
     """Return the effective check and collection decision inside one DB transaction."""
     if route is None or route["suppressed"]:
         raise ValueError("Active contact route is required")
+    if db.execute("""SELECT 1 FROM sell_inbound_opt_out x
+        JOIN sell_inbound_review v ON v.sequence = x.review_sequence
+        JOIN sell_opportunity o ON o.id = v.opportunity_id
+        WHERE o.product_id = ? AND o.candidate_id = ? AND x.route_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM sell_inbound_opt_out resolved
+                          WHERE resolved.inbound_id = x.inbound_id
+                            AND resolved.route_id IS NOT NULL)
+        LIMIT 1""", (route["product_id"], route["candidate_id"])).fetchone():
+        raise ValueError("Opt-out pending route resolution")
     if _current_status(db, route["product_id"], route["candidate_id"])["status"] != "QUALIFIED":
         raise ValueError("Current qualified company/product fit is required")
     kind = "BUSINESS_ROUTE" if route["kind"] == "CONTACT_FORM" else "PERSONAL_ROUTE"
@@ -281,26 +290,31 @@ class ContactRoutes:
 
     def suppress(self, kind: str, value: str, reason: str) -> None:
         actor = self.store._require_access("SUPPRESS_CONTACT", "contact-route")
-        _, key = _route_value(kind, value)
         _text(reason, "Suppression reason")
         with self.store._transaction() as db:
-            db.execute("""INSERT OR IGNORE INTO contact_suppression
-                (value_key, reason, actor_id, recorded_at_utc) VALUES (?, ?, ?, ?)""",
-                       (key, reason, actor, _utc_now()))
-            if kind.endswith("EMAIL"):
-                db.execute("""INSERT OR IGNORE INTO contact_suppression_rule
-                    (scope, value_key, reason, actor_id, recorded_at_utc)
-                    VALUES ('MAILBOX_BASE', ?, ?, ?, ?)""",
-                    (_digest(_mailbox_base(value)), reason, actor, _utc_now()))
-            routes = db.execute("""SELECT id, kind, route_value, value_key FROM discovered_contact_route
-                WHERE suppressed = 0""").fetchall()
-            for route in routes:
-                if (route["value_key"] == key or (kind.endswith("EMAIL")
-                        and route["kind"].endswith("EMAIL")
-                        and _mailbox_base(route["route_value"]) == _mailbox_base(value))):
-                    db.execute("""UPDATE discovered_contact_route SET route_value = NULL,
-                        person_name = NULL, person_role = NULL, source_url = NULL, suppressed = 1
-                        WHERE id = ?""", (route["id"],))
+            self._suppress(db, kind, value, reason, actor)
+
+    @staticmethod
+    def _suppress(db: object, kind: str, value: str, reason: str, actor: str) -> None:
+        """Apply hashed rules and redact matching routes in the caller's transaction."""
+        _, key = _route_value(kind, value)
+        db.execute("""INSERT OR IGNORE INTO contact_suppression
+            (value_key, reason, actor_id, recorded_at_utc) VALUES (?, ?, ?, ?)""",
+                   (key, reason, actor, _utc_now()))
+        if kind.endswith("EMAIL"):
+            db.execute("""INSERT OR IGNORE INTO contact_suppression_rule
+                (scope, value_key, reason, actor_id, recorded_at_utc)
+                VALUES ('MAILBOX_BASE', ?, ?, ?, ?)""",
+                (_digest(_mailbox_base(value)), reason, actor, _utc_now()))
+        routes = db.execute("""SELECT id, kind, route_value, value_key FROM discovered_contact_route
+            WHERE suppressed = 0""").fetchall()
+        for route in routes:
+            if (route["value_key"] == key or (kind.endswith("EMAIL")
+                    and route["kind"].endswith("EMAIL")
+                    and _mailbox_base(route["route_value"]) == _mailbox_base(value))):
+                db.execute("""UPDATE discovered_contact_route SET route_value = NULL,
+                    person_name = NULL, person_role = NULL, source_url = NULL, suppressed = 1
+                    WHERE id = ?""", (route["id"],))
 
     def suppress_domain(self, domain: str, reason: str) -> None:
         actor = self.store._require_access("SUPPRESS_CONTACT", "company-domain")

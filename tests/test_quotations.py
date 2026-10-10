@@ -55,7 +55,7 @@ class QuotationTests(unittest.TestCase):
                            reason="Withdraw synthetic quote")
         self.assertEqual(self.quotes.read(quote_id)["status"], "REVOKED")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 24)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 25)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE sell_quotation_revision SET revision = 3")
 
@@ -93,7 +93,7 @@ class QuotationTests(unittest.TestCase):
         reopened = PilotStore(self.path)
         self.assertEqual(self.rfqs.read(self.rfq_id)["status"], "ACCEPTED_SYNTHETIC")
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 24)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 25)
         self.assertIsNotNone(Quotations(reopened))
 
     def test_commercial_profile_change_invalidates_quotation(self):

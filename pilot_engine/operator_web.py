@@ -161,6 +161,8 @@ class OperatorWeb:
             return "send" if not case.get("send_approved") else "capture"
         if not ids["inbound"]:
             return "inbound"
+        if case["inbound"]["classification"] == "OPT_OUT":
+            return "blocked"
         if case["inbound"]["classification"] != "RFQ_CANDIDATE":
             return "review-inbound"
         if not ids["rfq"]:
@@ -259,7 +261,7 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         evidence = "Gerçek e-posta okunmaz. Yazdığınız örnek yanıt yerel kanıt dosyasında tutulur."
     elif step == "review-inbound":
         fields += _field("classification", "Yanıt sınıfı", "RFQ_CANDIDATE", kind="select",
-                         choices=("RFQ_CANDIDATE", "INTEREST", "REJECTION", "OTHER"))
+                         choices=("RFQ_CANDIDATE", "INTEREST", "REJECTION", "OTHER", "OPT_OUT"))
         fields += _field("explanation", "Sınıflandırma gerekçesi", kind="textarea")
         evidence = (f"Yanıt kaynağı: {case['inbound']['raw_ref']}\n\n"
                     + case.get("inbound_text", "Yanıt metni bulunamadı; kaynağı inceleyin."))
