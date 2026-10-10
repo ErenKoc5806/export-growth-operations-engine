@@ -16,9 +16,10 @@ python -m pilot_engine.operator_web
 `0700`. The process prints and opens a one-time local URL. It binds only to
 `127.0.0.1`, creates an unguessable session cookie, checks a per-process CSRF
 token and Origin on writes, and does not log form contents. Stop it with Ctrl-C.
-`EGO_ENV=pilot` is refused until #42 authorizes live-data mode. The first
-operator case must have an approved product, fit decision, route and handoff;
-their creation still uses the existing synthetic Find services.
+`EGO_ENV=pilot` is refused until #42 authorizes live-data mode. The operator
+can click **Örnek vakayı başlat** to create one wholly invented product, buyer,
+route and Find handoff. An existing case may also be selected from the list;
+real product and buyer setup remains outside this synthetic visual walkthrough.
 
 The guided path covers a current Find handoff, an opportunity and outreach
 draft, exact envelope review, an in-memory mock capture, an operator-entered

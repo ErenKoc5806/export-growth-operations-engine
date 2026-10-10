@@ -1,9 +1,13 @@
 import io
+import tempfile
 import unittest
+from pathlib import Path
 from urllib.parse import urlencode
 
 from pilot_engine.config import AppConfig, Environment
 from pilot_engine.operator_web import OperatorWeb, _case_page, _execute, _parse_form, make_handler
+from pilot_engine.store import PilotStore
+from pilot_engine.synthetic_demo import create_demo_handoff
 from test_sell_drafts import SellDraftTests
 
 
@@ -115,6 +119,16 @@ class OperatorWebTests(unittest.TestCase):
                      b"--test--\r\n")
         fields, files = _parse_form("multipart/form-data; boundary=test", multipart)
         self.assertEqual((fields, files), ({}, {"price_document": b"invented"}))
+
+    def test_demo_button_seeds_only_one_reviewable_find_handoff(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            store = PilotStore(path / "pilot.sqlite3")
+            app = OperatorWeb(AppConfig(Environment.TEST, store.scope, path))
+            handoff_id = create_demo_handoff(app.store)
+            self.assertEqual(create_demo_handoff(app.store), handoff_id)
+            self.assertEqual(app.step(app.chain(handoff_id)), "opportunity")
+            self.assertEqual(len(app.handoffs()), 1)
 
 
 if __name__ == "__main__":
