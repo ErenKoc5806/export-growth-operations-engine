@@ -26,7 +26,7 @@ class WindowsSyntheticTests(unittest.TestCase):
                                  "SyntheticTrial")
                 store = config.open_store()
                 with closing(store._connect()) as db:
-                    self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 28)
+                    self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 29)
                 app = OperatorWeb(config)
                 create_demo_handoff(app.store)
                 self.assertIn("Örnek vakayı başlat".encode(), _dashboard(app))

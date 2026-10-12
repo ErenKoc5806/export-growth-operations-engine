@@ -11,6 +11,7 @@ from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from uuid import uuid4
 
 from pilot_engine.access import LocalAccess, current_uid
 from pilot_engine.domain import DEFAULT_PILOT_SCOPE, OpportunityStatus, PilotScope, require_transition
@@ -46,6 +47,7 @@ MIGRATION_FILES = (
     "026_export_facts.sql",
     "027_po_amendment.sql",
     "028_shipments.sql",
+    "029_approval_events.sql",
 )
 
 
@@ -297,6 +299,35 @@ class PilotStore:
             raise PermissionError("TRANSITION denied for local OS account")
 
     @staticmethod
+    def _approval_target_hash(
+        db: sqlite3.Connection, oid: str, action: str, target_id: str, revision: int,
+    ) -> str:
+        if action == "APPROVE_QUOTE":
+            row = db.execute("""SELECT q.* FROM quotation_revision q
+                JOIN rfq r ON r.id = q.rfq_id
+                WHERE r.opportunity_id = ? AND q.quotation_id = ? AND q.revision = ?
+                  AND q.status = 'APPROVED' AND trim(q.approved_by) != ''
+                  AND q.revision = (SELECT MAX(revision) FROM quotation_revision
+                                    WHERE quotation_id = q.quotation_id)""",
+                (oid, target_id, revision)).fetchone()
+        else:
+            row = db.execute("""SELECT p.* FROM customer_po p
+                WHERE p.opportunity_id = ? AND p.id = ? AND p.quotation_revision = ?
+                  AND trim(p.accepted_by) != ''""", (oid, target_id, revision)).fetchone()
+        if row is None:
+            raise ValueError("Approval target does not match reviewed record")
+        return hashlib.sha256(_json(dict(row)).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _latest_approval(
+        db: sqlite3.Connection, oid: str, action: str, target_id: str, revision: int,
+    ) -> sqlite3.Row | None:
+        return db.execute("""SELECT * FROM approval_event
+            WHERE opportunity_id = ? AND action = ? AND target_id = ?
+              AND target_revision = ? ORDER BY sequence DESC LIMIT 1""",
+            (oid, action, target_id, revision)).fetchone()
+
+    @staticmethod
     def _require_approval(
         db: sqlite3.Connection, oid: str, target: OpportunityStatus,
         target_id: str | None, revision: int | None,
@@ -319,37 +350,40 @@ class PilotStore:
         elif target == OpportunityStatus.QUOTE_APPROVED:
             if not target_id or not isinstance(revision, int) or isinstance(revision, bool):
                 raise ValueError("Quotation revision approval target is required")
-            evidence = db.execute("""SELECT 1 FROM approval a
-                JOIN quotation_revision q ON q.quotation_id = a.target_id
-                                      AND q.revision = a.target_revision
-                JOIN rfq r ON r.id = q.rfq_id
-                WHERE r.opportunity_id = ? AND a.opportunity_id = ?
-                  AND a.target_id = ? AND a.target_revision = ?
-                  AND a.action = 'APPROVE_QUOTE' AND a.decision = 'APPROVED'
-                  AND q.status = 'APPROVED' AND trim(q.approved_by) != ''
-                  AND q.revision = (SELECT MAX(q2.revision) FROM quotation_revision q2
-                                    WHERE q2.quotation_id = q.quotation_id)
-                LIMIT 1""", (oid, oid, target_id, revision)).fetchone()
-            if evidence is None:
+            try:
+                digest = PilotStore._approval_target_hash(db, oid, "APPROVE_QUOTE", target_id, revision)
+            except ValueError as exc:
+                raise ValueError("Matching quotation revision approval is required") from exc
+            event = PilotStore._latest_approval(db, oid, "APPROVE_QUOTE", target_id, revision)
+            if (event is None or event["decision"] != "APPROVED"
+                    or (event["content_hash"] != digest and not
+                        (event["content_hash"] is None and event["legacy_approval_id"] is not None))):
                 raise ValueError("Matching quotation revision approval is required")
         elif target == OpportunityStatus.ORDER_DRAFT:
             if not target_id or not isinstance(revision, int) or isinstance(revision, bool):
                 raise ValueError("Customer PO approval target is required")
-            evidence = db.execute("""SELECT 1 FROM approval a
-                JOIN customer_po p ON p.id = a.target_id AND p.opportunity_id = a.opportunity_id
-                WHERE a.opportunity_id = ? AND a.target_id = ? AND a.target_revision = ?
-                  AND a.action = 'APPROVE_PO'
-                  AND a.decision = 'APPROVED' AND trim(p.accepted_by) != ''
-                  AND a.target_revision = p.quotation_revision
-                LIMIT 1""", (oid, target_id, revision)).fetchone()
-            if evidence is None:
+            try:
+                digest = PilotStore._approval_target_hash(db, oid, "APPROVE_PO", target_id, revision)
+            except ValueError as exc:
+                raise ValueError("Matching customer PO approval is required") from exc
+            event = PilotStore._latest_approval(db, oid, "APPROVE_PO", target_id, revision)
+            if (event is None or event["decision"] != "APPROVED"
+                    or (event["content_hash"] != digest and not
+                        (event["content_hash"] is None and event["legacy_approval_id"] is not None))):
                 raise ValueError("Matching customer PO approval is required")
 
     def record_approval(
         self, opportunity_id: str, action: str, target_id: str,
-        revision: int,
+        revision: int, reason: str = "",
     ) -> None:
-        """Bind approval to an OS authenticated local account and reviewed target."""
+        """Approve a reviewed target; a repeat after withdrawal needs a reason."""
+        self.decide_approval(opportunity_id, action, target_id, revision, "APPROVED", reason)
+
+    def decide_approval(
+        self, opportunity_id: str, action: str, target_id: str,
+        revision: int, decision: str, reason: str,
+    ) -> None:
+        """Append a decision; withdrawal stops future gates, not completed actions."""
         with self._transaction() as db:
             if action not in ("APPROVE_QUOTE", "APPROVE_PO"):
                 raise ValueError("Unsupported approval action")
@@ -357,26 +391,31 @@ class PilotStore:
             if actor_id is not None:
                 if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
                     raise ValueError("Approval requires a positive target revision")
-                if action == "APPROVE_QUOTE":
-                    match = db.execute("""SELECT 1 FROM quotation_revision q JOIN rfq r ON r.id = q.rfq_id
-                        WHERE r.opportunity_id = ? AND q.quotation_id = ? AND q.revision = ?
-                        AND q.status = 'APPROVED' AND trim(q.approved_by) != ''""",
-                        (opportunity_id, target_id, revision)).fetchone()
-                else:
-                    match = db.execute("""SELECT 1 FROM customer_po WHERE opportunity_id = ? AND id = ?
-                        AND quotation_revision = ? AND trim(accepted_by) != ''""",
-                        (opportunity_id, target_id, revision)).fetchone()
-                if match is None:
-                    raise ValueError("Approval target does not match reviewed record")
+                if decision not in ("APPROVED", "REVOKED", "REJECTED"):
+                    raise ValueError("Unsupported approval decision")
+                if not isinstance(reason, str) or len(reason) > 2000:
+                    raise ValueError("Approval reason is invalid")
+                digest = self._approval_target_hash(db, opportunity_id, action, target_id, revision)
+                prior = self._latest_approval(db, opportunity_id, action, target_id, revision)
+                if decision == "APPROVED":
+                    if prior is not None and prior["decision"] == "APPROVED":
+                        raise ValueError("This target revision already has an approval")
+                    if prior is not None and not reason.strip():
+                        raise ValueError("Reapproval needs a reviewed reason")
+                elif prior is None or prior["decision"] != "APPROVED":
+                    raise ValueError("Only an effective approval can be withdrawn")
+                elif not reason.strip():
+                    raise ValueError("Withdrawal needs a reason")
                 now = _utc_now()
-                approval_id = f"{action}:{target_id}:{revision}"
-                if db.execute("SELECT 1 FROM approval WHERE id = ?", (approval_id,)).fetchone():
-                    raise ValueError("This target revision already has an approval")
-                db.execute("INSERT INTO approval VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (approval_id, opportunity_id, action, target_id, revision,
-                            None, actor_id, "APPROVED", now))
+                db.execute("""INSERT INTO approval_event
+                    (id, opportunity_id, action, target_id, target_revision, content_hash,
+                     actor_id, decision, reason, decided_at_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (f"AE-{uuid4().hex}", opportunity_id, action, target_id, revision,
+                     digest, actor_id, decision, reason.strip(), now))
                 db.execute("INSERT INTO audit_event (opportunity_id, action, actor_id, target_id, before_state, after_state, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           (opportunity_id, action, actor_id, target_id, None, "APPROVED", now))
+                           (opportunity_id, action, actor_id, target_id,
+                            prior["decision"] if prior else None, decision, now))
         if actor_id is None:
             raise PermissionError(f"{action} denied for local OS account")
 
