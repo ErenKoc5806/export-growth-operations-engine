@@ -45,6 +45,16 @@ class ExecuteOperations:
             order = self.orders._order(db, order_id)
             if order is None or order["status"] != "LOCAL_ORDER_SYNTHETIC":
                 raise ValueError("Current approved local order is required")
+            if (kind in ("FREIGHT_PLAN", "BOOKING_CONFIRMATION") and
+                    db.execute("SELECT 1 FROM execute_shipment WHERE order_id = ?",
+                               (order_id,)).fetchone()):
+                raise ValueError("Use shipment-specific freight and booking")
+            if kind == "READINESS" and payload["quantity"] is not None:
+                allocated = sum((Decimal(row[0]) for row in db.execute(
+                    "SELECT quantity FROM execute_shipment WHERE order_id = ?", (order_id,))),
+                    Decimal(0))
+                if Decimal(payload["quantity"]) < allocated:
+                    raise ValueError("Readiness cannot fall below allocated shipment quantity")
             if kind == "BOOKING_CONFIRMATION":
                 if db.execute("""SELECT 1 FROM execute_operation_event
                     WHERE order_id = ? AND kind = 'BOOKING_CONFIRMATION'""",

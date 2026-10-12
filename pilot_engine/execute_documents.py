@@ -63,6 +63,10 @@ class ExecuteDocuments:
             order = self.operations.orders._order(db, order_id)
             if order is None or order["status"] != "LOCAL_ORDER_SYNTHETIC":
                 raise ValueError("Current approved order required")
+            if kind in ("PACKING", "INVOICE") and db.execute(
+                    "SELECT 1 FROM execute_shipment WHERE order_id = ?",
+                    (order_id,)).fetchone():
+                raise ValueError("Use shipment-specific packing and invoice")
             existing = db.execute("SELECT id FROM execute_document WHERE order_id = ? AND kind = ?",
                                   (order_id, kind)).fetchone()
             if existing is None:

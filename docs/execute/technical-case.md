@@ -65,3 +65,30 @@ carrier evidence and document review under [pilot readiness #13](https://github.
 The local test actor is not that authorization. Follow-up work must measure
 operator time and corrections in a real pilot, and design approved external
 adapters separately; the synthetic technical case is not a live export.
+
+## Partial shipment records
+
+`ExecuteShipments` allocates immutable whole-unit quantities against an approved
+order and the latest confirmed cumulative goods readiness. Allocation and insert
+share a SQLite writer transaction, so concurrent requests cannot exceed the
+order or ready quantity. A repeated operation key returns the same shipment
+only for matching inputs. Later readiness observations cannot reduce confirmed
+quantity below allocated units.
+
+Each shipment has its own versioned freight plan, packing list and invoice
+draft. Packing must reconcile to its shipment quantity and current freight
+package count, weights and dimensions. The invoice uses that shipment's
+quantity and the approved order unit price, and pins the reviewed packing
+revision and manufacturer-reviewed HS/origin facts. New freight, packing or
+export facts make affected document reviews stale. Synthetic booking evidence
+is recorded once per shipment with packing hash and freight version; an
+unknown outcome cannot be retried automatically. Later changes mark that
+observation for review without deleting its audit record. These records always
+report `real_shipped_quantity: 0`.
+
+Existing order-wide freight and document records cannot be mixed with the
+shipment path. The operator console exposes `shipment-create`,
+`shipment-freight`, `shipment-packing`, `shipment-invoice`,
+`shipment-document-review` and `shipment-booking`, with corresponding read
+views. The guided visual case still follows the full-order path; shipment
+forms remain a task for the visual operator workspace.
