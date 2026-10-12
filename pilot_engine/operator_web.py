@@ -16,11 +16,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pilot_engine.config import AppConfig, Environment
 from pilot_engine.execute_documents import ExecuteDocuments
 from pilot_engine.execute_operations import ExecuteOperations
-from pilot_engine.execute_order import ExecuteOrder
+from pilot_engine.execute_order import AMENDABLE_FIELDS, ExecuteOrder, _amount
 from pilot_engine.shipments import ExecuteShipments
 from pilot_engine.operator_shipments import shipment_execute, shipment_page
 from pilot_engine.find_handoff import FindHandoff
@@ -32,21 +33,50 @@ from pilot_engine.sell_delivery import CaptureMailbox, SellDelivery
 from pilot_engine.sell_drafts import SellDrafts
 from pilot_engine.synthetic_demo import create_demo_handoff
 
+ISTANBUL = ZoneInfo("Europe/Istanbul")
+
 
 def _h(value: object) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
+def _user_error(value: str) -> str:
+    messages = {
+        "PO source reference conflicts with original evidence":
+            "Seçilen dosya ilk PO kaydındaki özgün dosyayla eşleşmiyor. Aynı dosyayı yeniden seçin.",
+        "PO revision changed; reload":
+            "PO bu sırada değişti. Sayfayı yenileyip son sürümü inceleyin.",
+        "Current exact PO revision is required":
+            "PO sürümü değişti. Sayfayı yenileyip güncel içeriği tekrar inceleyin.",
+        "PO mismatch needs exact reviewed amendment or a new quote":
+            "Tüm farklar tek tek incelenmeli. Ürün, fiyat veya artan miktar için yeni teklif gerekir.",
+        "Only labeled synthetic PO evidence is allowed":
+            "Sentetik özgün PO dosyasını seçin; dosya boş olamaz.",
+        "Use existing PO identity and revision for correction":
+            "Bu PO için mevcut kaydı ve güncel sürümü kullanarak düzeltme yapın.",
+    }
+    return messages.get(value, value)
+
+
 def _utc(value: str) -> str:
-    parsed = datetime.fromisoformat(value)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        raise ValueError("Tarih saat dilimi içermeli; örnek: 2027-01-01T12:00:00Z")
+        parsed = parsed.replace(tzinfo=ISTANBUL)
+        if parsed.astimezone(timezone.utc).astimezone(ISTANBUL).replace(tzinfo=None) != parsed.replace(tzinfo=None):
+            raise ValueError("Bu yerel tarih/saat geçerli değil")
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 def _future(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=days)).replace(
         hour=12, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+
+
+def _date_field(name: str, label: str, utc_value: str, *, required: bool = True) -> str:
+    value = (datetime.fromisoformat(utc_value.replace("Z", "+00:00"))
+             .astimezone(ISTANBUL).strftime("%Y-%m-%dT%H:%M") if utc_value else "")
+    return _field(name, label + " (İstanbul saati)", value,
+                  kind="datetime-local", required=required)
 
 
 def _field(name: str, label: str, value: object = "", *, kind: str = "text",
@@ -69,6 +99,18 @@ def _first(db: object, sql: str, *args: str) -> str | None:
     return row[0] if row else None
 
 
+def _po_reviewable(case: dict) -> bool:
+    po = case["po"]
+    if set(po["differences"]) - AMENDABLE_FIELDS or not po["quote_current"]:
+        return False
+    if "quantity" in po["differences"]:
+        with closing(case["store"]._connect()) as db:
+            _, expected = ExecuteOrder(case["store"])._expected(db, case["ids"]["quote"])
+        amount = _amount(po["payload"].get("quantity"))
+        return amount is not None and amount <= _amount(expected["quantity"])
+    return True
+
+
 class OperatorWeb:
     """View and mutation boundaries share the same service layer as the CLI."""
 
@@ -89,7 +131,7 @@ class OperatorWeb:
         handoff = FindHandoff(self.store).read(handoff_id)
         if handoff is None:
             raise ValueError("Find devri bulunamadı")
-        result = {"handoff": handoff}
+        result = {"handoff": handoff, "store": self.store}
         with closing(self.store._connect()) as db:
             ids = {}
             ids["opportunity"] = _first(db, """SELECT id FROM sell_opportunity
@@ -194,6 +236,10 @@ class OperatorWeb:
         if not ids["po"]:
             return "po"
         if case["po"]["status"] in ("DRAFT", "REVIEW_REQUIRED") and not ids["order"]:
+            if not case["po"]["quote_current"]:
+                return "blocked"
+            if not _po_reviewable(case):
+                return "correct-po"
             return "approve-po"
         if not ids["order"] or case["case"]["operations"]["order"]["status"] != "LOCAL_ORDER_SYNTHETIC":
             return "blocked"
@@ -236,6 +282,10 @@ button,.button{display:inline-block;background:#1759a0;color:white;border:0;bord
 a{color:#1759a0}.row{border-bottom:1px solid #e4e9ee;padding:12px 0}.row:last-child{border:0}
 .error{background:#fce9e8;border:1px solid #d98380;padding:12px;border-radius:8px}
 .evidence{background:#f7f9fb;border-radius:10px;padding:12px;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.comparison{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+.comparison caption{text-align:left;font-weight:700;font-size:17px;margin-bottom:8px}
+.comparison th,.comparison td{border-bottom:1px solid #dce3eb;padding:8px;text-align:left;overflow-wrap:anywhere}
+.comparison tr:nth-child(even){background:#f7f9fb}
 @media(max-width:760px){.grid{grid-template-columns:1fr}header{padding:20px 24px}}
 """
 
@@ -246,7 +296,8 @@ TITLES = {
     "rfq": "RFQ bilgilerini gir", "accept-rfq": "RFQ'yu inceleyip kabul et",
     "price": "Üretici test fiyatını kaydet", "quote": "Teklif taslağı oluştur",
     "approve-quote": "Teklif taslağını onayla", "po": "Örnek müşteri PO'sunu gir",
-    "approve-po": "PO'yu inceleyip yerel siparişi aç", "erp": "ERP için manuel devir kaydet",
+    "approve-po": "PO'yu inceleyip yerel siparişi aç", "correct-po": "PO girişini düzelt",
+    "erp": "ERP için manuel devir kaydet",
     "readiness": "Mal hazırlık durumunu kaydet", "freight": "Navlun talebini planla",
     "invoice": "Fatura taslağı", "packing": "Paketleme taslağı",
     "export-facts": "İhracat bilgilerini incele",
@@ -256,6 +307,32 @@ TITLES = {
     "complete": "Teknik vaka tamamlandı",
     "shipments": "Kısmi sevkiyatlar",
 }
+
+
+PO_LABELS = (("buyer", "Alıcı"), ("seller", "Satıcı"), ("sku", "SKU"),
+             ("description", "Ürün açıklaması"), ("quantity", "Miktar"),
+             ("unit", "Birim"), ("unit_price", "Birim fiyat"),
+             ("currency", "Para birimi"), ("total", "Toplam"),
+             ("incoterm_code", "Incoterm"), ("incoterm_place", "Teslim yeri"),
+             ("requested_delivery_at_utc", "İstenen teslim tarihi (UTC)"))
+
+
+def _po_comparison(case: dict) -> str:
+    po = case["po"]
+    with closing(case["store"]._connect()) as db:
+        _, expected = ExecuteOrder(case["store"])._expected(db, case["ids"]["quote"])
+    rows = []
+    for key, label in PO_LABELS:
+        difference = key in po["differences"]
+        rows.append("<tr><th>" + _h(label) + "</th><td>" + _h(expected.get(key, "—"))
+                    + "</td><td>" + _h(po["payload"].get(key, "—")) + "</td><td>"
+                    + ("Fark" if difference else "Eşleşiyor") + "</td></tr>")
+    extras = set(po["differences"]) - {key for key, _ in PO_LABELS}
+    return ("<table class='comparison'><caption>Teklif ve PO karşılaştırması</caption>"
+            "<thead><tr><th>Alan</th><th>Teklif</th><th>PO girişi</th><th>Durum</th></tr></thead>"
+            "<tbody>" + "".join(rows) + "</tbody></table>"
+            + ("<p>Ek doğrulama hataları: " + _h(", ".join(sorted(extras))) + "</p>"
+               if extras else ""))
 
 
 def _form_for(case: dict, step: str) -> tuple[str, str]:
@@ -300,36 +377,43 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         evidence = json.dumps(case["rfq"]["payload"], ensure_ascii=False, indent=2)
     elif step == "price":
         fields += _field("unit_price_text", "Test birim fiyatı (EUR)", kind="number")
-        fields += _field("valid_until_utc", "Fiyat geçerliliği (UTC, saat dilimiyle)", _future(180))
+        fields += _date_field("valid_until_utc", "Fiyat geçerliliği", _future(180))
         fields += _field("price_document", "Sentetik fiyat belgesi", kind="file")
         evidence = "Belge yalnızca hash için okunur. Gerçek fiyat veya müşteri dosyası yüklemeyin."
     elif step == "quote":
-        fields += _field("valid_until_utc", "Teklif geçerliliği (UTC, saat dilimiyle)", _future(90))
+        fields += _date_field("valid_until_utc", "Teklif geçerliliği", _future(90))
         fields += _field("exclusions", "Hariç tutulanlar", "Sentetik teklif; gerçek gönderim yok")
         evidence = f"Kaynak RFQ: {case['rfq']['payload']['specification']} · {case['rfq']['payload']['quantity']} {case['rfq']['payload']['unit']}"
     elif step == "approve-quote":
         fields += _field("reason", "Teklif inceleme gerekçesi")
         evidence = json.dumps(case["quote"]["payload"], ensure_ascii=False, indent=2)
-    elif step == "po":
+    elif step in ("po", "correct-po"):
         with closing(case["store"]._connect()) as db:
             _, expected = ExecuteOrder(case["store"])._expected(db, ids["quote"])
-        for key, label in (("buyer", "Alıcı"), ("seller", "Satıcı"), ("sku", "SKU"),
-                           ("quantity", "Miktar"), ("unit", "Birim"),
-                           ("unit_price", "Birim fiyat"), ("currency", "Para birimi"),
-                           ("total", "Toplam"), ("incoterm_code", "Incoterm"),
-                           ("incoterm_place", "Teslim yeri")):
-            fields += _field(key, label, expected[key])
-        fields += _field("description", "PO ürün açıklaması", case["quote"]["payload"]["specification"])
-        fields += _field("requested_delivery_at_utc", "İstenen teslim tarihi (UTC)", _future(120))
-        fields += _field("po_document", "Sentetik PO dosyası", kind="file")
-        evidence = "Alanlar tekliften önerildi. PO dosyasıyla karşılaştırarak onaylayın. Uyuşmazlıklar onayı durdurur."
+        values = (case["po"]["payload"] if step == "correct-po" else
+                  {**expected, "description": case["quote"]["payload"]["specification"],
+                   "requested_delivery_at_utc": _future(120)})
+        for key, label in PO_LABELS:
+            fields += (_date_field(key, "İstenen teslim tarihi", values[key])
+                       if key == "requested_delivery_at_utc" else
+                       _field(key, label, values[key], kind="number" if key in
+                              ("quantity", "unit_price", "total") else "text"))
+        fields += _field("po_document", "Aynı özgün sentetik PO dosyasını tekrar seçin"
+                         if step == "correct-po" else "Sentetik PO dosyası", kind="file")
+        evidence = ("Özgün PO dosyası yeniden seçilmelidir. Aynı kaynak ve dosya hash'i "
+                    "korunur; formdaki düzeltme yeni sürüm olur. Dosyada olmayan bir değeri "
+                    "düzeltme olarak yazmayın." if step == "correct-po" else
+                    "Alanlar tekliften önerildi. PO dosyasıyla karşılaştırarak kaydedin.")
     elif step == "approve-po":
         fields += _field("reason", "PO onay gerekçesi")
-        evidence = (json.dumps(case["po"]["payload"], ensure_ascii=False, indent=2)
-                    + "\nUyuşmazlıklar: " + ", ".join(case["po"]["differences"]))
+        evidence = (f"Özgün PO SHA-256: {case['po']['original_sha256']}\n"
+                    f"Kaynak: {case['po']['original_ref']}\n"
+                    f"Revizyon: {case['po']['revision']}\n"
+                    f"Girilen alanlar SHA-256: {case['po']['payload_sha256']}\n"
+                    "İzinli farklar için her alanı ve özgün dosyayı karşılaştırın.")
         for difference in case["po"]["differences"]:
             fields += (f'<label class="check"><input type="checkbox" name="review_{difference}" '
-                       f'value="yes" required>{difference} farkını özgün PO ve teklif ile inceledim.</label>')
+                       f'value="yes" required>{_h(difference)} farkını özgün PO ve teklif ile inceledim.</label>')
     elif step == "erp":
         fields += _field("customer_mapping_ref", "ERP müşteri eşleme referansı", "SYN-CUSTOMER-MAP")
         fields += _field("tax_mapping_ref", "Vergi eşleme referansı", "SYN-TAX-MAP")
@@ -338,9 +422,9 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
     elif step == "readiness":
         fields += _field("status", "Hazırlık durumu", "PENDING", kind="select",
                          choices=("PENDING", "PARTIAL", "READY"))
-        fields += _field("planned_at_utc", "Planlanan hazırlık zamanı (UTC)", _future(100))
-        fields += _field("actual_at_utc", "Fiilî hazırlık zamanı (PARTIAL/READY için UTC)",
-                         "", required=False)
+        fields += _date_field("planned_at_utc", "Planlanan hazırlık zamanı", _future(100))
+        fields += _date_field("actual_at_utc", "Fiilî hazırlık zamanı (PARTIAL/READY için)",
+                              "", required=False)
         fields += _field("quantity", "Hazır toplam miktar (PARTIAL/READY için)",
                          "", kind="number", required=False)
         fields += _field("reason", "Kaynak ve durum açıklaması", "Üreticiden sentetik teyit bekleniyor")
@@ -473,6 +557,18 @@ def _execute(case: dict, step: str, values: dict[str, str], files: dict[str, byt
             original=files.get("po_document", b""),
             received_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             payload=payload)
+    elif step == "correct-po":
+        po = case["po"]
+        if ids["order"] or not po["quote_current"]:
+            raise ValueError("PO düzeltmesi için güncel teklif ve onaysız PO gerekli")
+        keys = ("buyer", "seller", "sku", "description", "quantity", "unit", "unit_price",
+                "currency", "total", "incoterm_code", "incoterm_place")
+        payload = {key: required(key) for key in keys}
+        payload["requested_delivery_at_utc"] = _utc(required("requested_delivery_at_utc"))
+        ExecuteOrder(store).save(ids["quote"], source_ref=po["source_ref"],
+            original_ref=po["original_ref"], original=files.get("po_document", b""),
+            received_at_utc=po["received_at_utc"], payload=payload,
+            po_id=po["id"], expected_revision=po["revision"])
     elif step == "approve-po":
         po = case["po"]
         ExecuteOrder(store).decide(ids["po"], po["revision"], "APPROVE",
@@ -594,10 +690,11 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
                + _h(case["product"]["sku"]) + " · " + _h(handoff["market_country"])
                + " · <span class='badge'>SENTETİK</span></p>")
     if error:
-        details += "<div class='error'>" + _h(error) + "</div>"
+        details += "<div class='error'>" + _h(_user_error(error)) + "</div>"
     if case["ids"]["order"]:
         details += ("<p><a class='button' href='/shipments?id=" + _h(handoff_id)
-                    + "'>Kısmi sevkiyatlar</a></p>")
+                    + "'>Kısmi sevkiyatlar</a> <a href='/feedback?id=" + _h(handoff_id)
+                    + "'>Deneme notlarını kaydet</a></p>")
     if step == "blocked":
         details += ("<div class='error'>Kaynak, rota, revizyon veya ticari alan yeniden "
                     "inceleme gerektiriyor. İşlem durduruldu; bu ekranda düzeltme "
@@ -611,12 +708,8 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
         details += ("<h3>Teknik vaka tamamlandı</h3><p>Bu sonuç gerçek sevkiyat "
                     "veya yayımlanmış belge anlamına gelmez.</p><p>Açık maddeler: "
                     + _h(", ".join(summary["issues"]) or "Yok") + "</p>")
-        details += ("<h3>Operatör geri bildirimi</h3><form method='post' action='/feedback?id="
-                    + _h(handoff_id) + "'><input type='hidden' name='csrf' value='"
-                    + _h(app.csrf) + "'>" + _field("friction", "Nerede zorlandınız?", kind="textarea")
-                    + _field("suggestion", "Neyi değiştirelim?", kind="textarea")
-                    + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Geri bildirimi kaydet.</label>'
-                    + "<button>Geri bildirimi kaydet</button></form>")
+        details += ("<p><a class='button' href='/feedback?id=" + _h(handoff_id)
+                    + "'>Deneme notlarını ve süreyi kaydet</a></p>")
     elif step == "shipments":
         details += ("<h3>Kısmi sevkiyat akışı</h3><p>Üretici hazırlık miktarını ve "
                     "her sevkiyatın belgelerini ayrı ekranda kaydedin.</p><a class='button' "
@@ -625,11 +718,21 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
         fields, evidence = _form_for(case, step)
         details += ("<h3>Şimdiki adım: " + _h(TITLES[step]) + "</h3>"
                     "<div class='evidence'>" + _h(evidence) + "</div>"
+                    + (_po_comparison(case) if step in ("approve-po", "correct-po") else "") +
                     "<form method='post' enctype='multipart/form-data' action='/case?id="
                     + _h(handoff_id) + "'><input type='hidden' name='csrf' value='"
                     + _h(app.csrf) + "'><input type='hidden' name='step' value='"
                     + _h(step) + "'>" + fields + "<button>" + _h(TITLES[step])
                     + "</button></form>")
+        if step == "approve-po":
+            correction_fields, correction_evidence = _form_for(case, "correct-po")
+            details += ("<details><summary>PO girişindeki alanları düzelt</summary>"
+                        "<p>Bu yol özgün dosyadan yanlış girilmiş alanlar içindir.</p>"
+                        "<div class='evidence'>" + _h(correction_evidence) + "</div>"
+                        "<form method='post' enctype='multipart/form-data' action='/case?id="
+                        + _h(handoff_id) + "'><input type='hidden' name='csrf' value='"
+                        + _h(app.csrf) + "'><input type='hidden' name='step' value='correct-po'>"
+                        + correction_fields + "<button>PO girişini düzelt</button></form></details>")
     details += "</div>"
     return _layout("<div class='grid'>" + sidebar + details + "</div>")
 
@@ -658,15 +761,53 @@ def _parse_form(content_type: str, body: bytes) -> tuple[dict[str, str], dict[st
     return fields, files
 
 
+def _feedback_page(app: OperatorWeb, handoff_id: str, *, saved: bool = False,
+                   error: str = "") -> bytes:
+    case = app.chain(handoff_id)
+    if not case["ids"]["order"]:
+        raise ValueError("Deneme notları için önce yerel sipariş oluşturun")
+    content = ("<p><a href='/case?id=" + _h(handoff_id) + "'>← Vakaya dön</a></p>"
+               "<h2>Operatör denemesi</h2><p>Bu sentetik vakayı ekrandan yürütürken "
+               "geçen süreyi, düzelttiğiniz alanları ve duraksadığınız adımı kaydedin. "
+               "Gerçek alıcı veya ticari veri yazmayın.</p>")
+    if saved:
+        content += "<p class='badge good'>Deneme notları kaydedildi.</p>"
+    if error:
+        content += "<div class='error'>" + _h(error) + "</div>"
+    content += ("<form method='post' action='/feedback?id=" + _h(handoff_id)
+                + "'><input type='hidden' name='csrf' value='" + _h(app.csrf) + "'>"
+                + _field("operator_role", "Deneyen kişinin rolü", "Operatör")
+                + _field("minutes", "Geçen süre (dakika)", kind="number")
+                + _field("corrections", "Düzeltilen giriş sayısı", "0", kind="number")
+                + _field("hesitation_step", "En çok duraksadığınız adım")
+                + _field("friction", "Nerede zorlandınız?", kind="textarea")
+                + _field("suggestion", "Ne değişirse kolaylaşır?", kind="textarea")
+                + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Bu kendi deneme gözlemimdir.</label>'
+                + "<button>Deneme notlarını kaydet</button></form>")
+    return _layout(content)
+
+
 def _save_feedback(app: OperatorWeb, case: dict, values: dict[str, str]) -> None:
     if values.get("confirm") != "yes":
         raise ValueError("Geri bildirim için açık onay gerekli")
     friction, suggestion = (values.get(key, "").strip() for key in ("friction", "suggestion"))
-    if not friction or not suggestion or max(len(friction), len(suggestion)) > 2000:
+    role = values.get("operator_role", "").strip()
+    hesitation = values.get("hesitation_step", "").strip()
+    if (not friction or not suggestion or not role or not hesitation
+            or max(len(friction), len(suggestion)) > 2000
+            or max(len(role), len(hesitation)) > 150):
         raise ValueError("Geri bildirim alanlarını doldurun (en fazla 2000 karakter)")
+    try:
+        minutes, corrections = (int(values.get(key, "")) for key in ("minutes", "corrections"))
+    except ValueError as exc:
+        raise ValueError("Süre ve düzeltme sayısı tam sayı olmalı") from exc
+    if not 0 <= minutes <= 10000 or not 0 <= corrections <= 1000:
+        raise ValueError("Süre veya düzeltme sayısı geçersiz")
     order_id = case["ids"]["order"]
     actor = app.store._require_access("EDIT_EXECUTE", order_id)
-    record = {"order_id": order_id, "friction": friction, "suggestion": suggestion,
+    record = {"order_id": order_id, "operator_role": role,
+              "minutes": minutes, "corrections": corrections,
+              "hesitation_step": hesitation, "friction": friction, "suggestion": suggestion,
               "data_origin": "SYNTHETIC", "actor_id": actor,
               "recorded_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
@@ -733,6 +874,9 @@ def make_handler(app: OperatorWeb):
                     body = _case_page(app, self._case_id())
                 elif parsed.path == "/shipments":
                     body = shipment_page(app, self._case_id(), self._shipment_id())
+                elif parsed.path == "/feedback":
+                    saved = parse_qs(parsed.query).get("saved", []) == ["1"]
+                    body = _feedback_page(app, self._case_id(), saved=saved)
                 else:
                     self._send(HTTPStatus.NOT_FOUND, _layout("<h2>Sayfa bulunamadı</h2>"))
                     return
@@ -780,17 +924,24 @@ def make_handler(app: OperatorWeb):
                 case["store"] = app.store
                 case["data_dir"] = app.config.data_dir
                 step = app.step(case)
-                if parsed.path == "/case" and step == values.get("step"):
-                    _execute(case, step, values, files)
-                elif parsed.path == "/feedback" and step == "complete":
+                if parsed.path == "/case" and (step == values.get("step") or
+                    (step == "approve-po" and values.get("step") == "correct-po")):
+                    _execute(case, values["step"], values, files)
+                elif parsed.path == "/feedback" and case["ids"]["order"]:
+                    if files:
+                        raise ValueError("Deneme notu formu dosya kabul etmez")
                     _save_feedback(app, case, values)
                 else:
                     raise ValueError("Vaka değişti; sayfayı yenileyip tekrar inceleyin")
-                self._send(HTTPStatus.SEE_OTHER, b"", location="/case?id=" + handoff_id)
+                location = ("/feedback?id=" + handoff_id + "&saved=1" if parsed.path == "/feedback"
+                            else "/case?id=" + handoff_id)
+                self._send(HTTPStatus.SEE_OTHER, b"", location=location)
             except (ValueError, KeyError, TypeError, OSError) as exc:
                 try:
                     body = (shipment_page(app, self._case_id(), self._shipment_id(), str(exc))
                             if parsed.path == "/shipments" else
+                            _feedback_page(app, self._case_id(), error=str(exc))
+                            if parsed.path == "/feedback" else
                             _case_page(app, self._case_id(), str(exc)))
                 except (ValueError, KeyError):
                     body = _layout("<h2>İşlem durduruldu</h2><p>" + _h(exc) + "</p>")
