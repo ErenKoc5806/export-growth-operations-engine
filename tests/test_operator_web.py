@@ -110,7 +110,8 @@ class OperatorWebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Satış fırsatını aç".encode(), page)
         body = urlencode({"step": "opportunity", "confirm": "yes", "csrf": "invalid"})
-        headers = {"Cookie": cookie, "Origin": "http://127.0.0.1:8080",
+        headers = {"Cookie": cookie, "Host": "127.0.0.1:8080",
+                   "Origin": "http://127.0.0.1:8080",
                    "Content-Type": "application/x-www-form-urlencoded",
                    "Content-Length": str(len(body))}
         self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
@@ -118,6 +119,14 @@ class OperatorWebTests(unittest.TestCase):
         headers["Content-Length"] = str(len(body))
         self.assertEqual(request("do_POST", path, headers, body.encode())[0], 303)
         self.assertEqual(self.app.step(self.app.chain(self.handoff_id)), "draft")
+        headers["Origin"] = "http://example.com"
+        self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
+        del headers["Origin"]
+        headers["Sec-Fetch-Site"] = "cross-site"
+        self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
+        headers["Sec-Fetch-Site"] = "same-origin"
+        headers["Host"] = "localhost:8080"
+        self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
         multipart = (b"--test\r\nContent-Disposition: form-data; name=\"price_document\"; "
                      b"filename=\"price.txt\"\r\nContent-Type: text/plain\r\n\r\ninvented\r\n"
                      b"--test--\r\n")

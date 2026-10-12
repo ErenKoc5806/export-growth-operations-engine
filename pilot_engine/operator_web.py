@@ -902,11 +902,18 @@ def make_handler(app: OperatorWeb):
                     "<h2>Oturum doğrulanamadı</h2><p>Bu pencerenin oturumu bulunamadı. "
                     "PowerShell penceresindeki tam bağlantıyı yeniden açın.</p>"))
                 return
+            expected_origin = f"http://127.0.0.1:{self.server.server_port}"
             origin = self.headers.get("Origin")
-            if origin != f"http://127.0.0.1:{self.server.server_port}":
+            fetch_site = self.headers.get("Sec-Fetch-Site")
+            if (self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+                    or (origin is not None and origin != expected_origin)
+                    or fetch_site == "cross-site"):
                 self._send(HTTPStatus.FORBIDDEN, _layout(
                     "<h2>Formun kaynağı doğrulanamadı</h2><p>PowerShell penceresindeki "
-                    "tam 127.0.0.1 bağlantısından yeniden deneyin.</p>"))
+                    "tam 127.0.0.1 bağlantısından yeniden deneyin.</p><p>" +
+                    _h("Origin: " + (origin if origin is not None else "yok") +
+                       "; Fetch-Site: " + (fetch_site if fetch_site is not None else "yok")) +
+                    "</p>"))
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
