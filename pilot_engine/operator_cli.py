@@ -15,6 +15,7 @@ from pilot_engine.config import AppConfig, Environment
 from pilot_engine.execute_documents import ExecuteDocuments
 from pilot_engine.execute_operations import ExecuteOperations
 from pilot_engine.execute_order import ExecuteOrder
+from pilot_engine.shipments import ExecuteShipments
 from pilot_engine.find_handoff import FindHandoff
 from pilot_engine.inbound import InboundResponses
 from pilot_engine.manual_contact import ManualContact
@@ -38,6 +39,9 @@ READS = {
     "operations": (ExecuteOperations, "summary"),
     "document": (ExecuteDocuments, "read"),
     "case": (ExecuteDocuments, "case_summary"),
+    "shipment": (ExecuteShipments, "read"),
+    "shipments": (ExecuteShipments, "summary"),
+    "shipment-document": (ExecuteShipments, "read_document"),
 }
 
 # Each action names the service method, its source record, and the JSON key for
@@ -72,6 +76,12 @@ ACTIONS = {
     "checklist-draft": (ExecuteDocuments, "checklist", "order", "order_id"),
     "document-review": (ExecuteDocuments, "review", "document", "document_id"),
     "metric-record": (ExecuteDocuments, "record_case_metric", "case", "order_id"),
+    "shipment-create": (ExecuteShipments, "create", "order", "order_id"),
+    "shipment-freight": (ExecuteShipments, "plan_freight", "shipment", "shipment_id"),
+    "shipment-packing": (ExecuteShipments, "packing", "shipment", "shipment_id"),
+    "shipment-invoice": (ExecuteShipments, "invoice", "shipment", "shipment_id"),
+    "shipment-document-review": (ExecuteShipments, "review_document", "shipment-document", "document_id"),
+    "shipment-booking": (ExecuteShipments, "confirm_booking", "shipment", "shipment_id"),
 }
 
 QUEUES = {
@@ -85,6 +95,8 @@ QUEUES = {
     "po": ("execute_po", "id"),
     "order": ("execute_local_order", "id"),
     "document": ("execute_document", "id"),
+    "shipment": ("execute_shipment", "id"),
+    "shipment-document": ("execute_shipment_document", "id"),
 }
 
 
