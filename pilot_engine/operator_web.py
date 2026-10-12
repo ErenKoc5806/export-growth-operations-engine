@@ -825,6 +825,11 @@ def _save_feedback(app: OperatorWeb, case: dict, values: dict[str, str]) -> None
 
 def make_handler(app: OperatorWeb):
     class Handler(BaseHTTPRequestHandler):
+        def _session_cookie(self) -> str:
+            # Cookies are scoped to a host, not a port. Separate concurrent
+            # localhost trials so opening a new window cannot revoke an old one.
+            return f"ego_session_{self.server.server_port}={app.session}"
+
         def _send(self, code: int, body: bytes, *, cookie: bool = False,
                   location: str | None = None) -> None:
             self.send_response(code)
@@ -837,7 +842,7 @@ def make_handler(app: OperatorWeb):
                              "style-src 'unsafe-inline'; form-action 'self'; "
                              "base-uri 'none'; frame-ancestors 'none'")
             if cookie:
-                self.send_header("Set-Cookie", "ego_session=" + app.session
+                self.send_header("Set-Cookie", self._session_cookie()
                                  + "; HttpOnly; SameSite=Strict; Path=/")
             if location:
                 self.send_header("Location", location)
@@ -846,7 +851,7 @@ def make_handler(app: OperatorWeb):
 
         def _authorized(self) -> bool:
             cookies = [part.strip() for part in self.headers.get("Cookie", "").split(";")]
-            return ("ego_session=" + app.session) in cookies
+            return self._session_cookie() in cookies
 
         def _case_id(self) -> str:
             parsed = urlsplit(self.path)
@@ -893,11 +898,15 @@ def make_handler(app: OperatorWeb):
         def do_POST(self) -> None:
             parsed = urlsplit(self.path)
             if not self._authorized():
-                self._send(HTTPStatus.FORBIDDEN, b"")
+                self._send(HTTPStatus.FORBIDDEN, _layout(
+                    "<h2>Oturum doğrulanamadı</h2><p>Bu pencerenin oturumu bulunamadı. "
+                    "PowerShell penceresindeki tam bağlantıyı yeniden açın.</p>"))
                 return
             origin = self.headers.get("Origin")
             if origin != f"http://127.0.0.1:{self.server.server_port}":
-                self._send(HTTPStatus.FORBIDDEN, b"")
+                self._send(HTTPStatus.FORBIDDEN, _layout(
+                    "<h2>Formun kaynağı doğrulanamadı</h2><p>PowerShell penceresindeki "
+                    "tam 127.0.0.1 bağlantısından yeniden deneyin.</p>"))
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -906,7 +915,8 @@ def make_handler(app: OperatorWeb):
                 values, files = _parse_form(self.headers.get("Content-Type", ""),
                                             self.rfile.read(length))
                 if not secrets.compare_digest(values.get("csrf", ""), app.csrf):
-                    self._send(HTTPStatus.FORBIDDEN, b"")
+                    self._send(HTTPStatus.FORBIDDEN, _layout(
+                        "<h2>Form oturumu değişti</h2><p>Sayfayı yenileyip yeniden deneyin.</p>"))
                     return
                 if parsed.path == "/demo":
                     if values.get("confirm") != "yes":

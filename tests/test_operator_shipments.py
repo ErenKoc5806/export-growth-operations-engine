@@ -87,7 +87,7 @@ class OperatorShipmentTests(unittest.TestCase):
 
         path = "/shipments?id=" + self.handoff_id
         self.assertEqual(request("do_GET", path)[0], 403)
-        cookie = "ego_session=" + self.app.session
+        cookie = "ego_session_8080=" + self.app.session
         status, page = request("do_GET", path, {"Cookie": cookie})
         self.assertEqual(status, 200)
         self.assertIn("Kısmi sevkiyatlar".encode(), page)

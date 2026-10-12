@@ -104,7 +104,7 @@ class OperatorWebTests(unittest.TestCase):
 
         self.assertEqual(request("do_GET", "/")[0], 403)
         self.assertEqual(request("do_GET", "/?token=" + self.app.session)[0], 303)
-        cookie = "ego_session=" + self.app.session
+        cookie = "ego_session_8080=" + self.app.session
         path = "/case?id=" + self.handoff_id
         status, page = request("do_GET", path, {"Cookie": cookie})
         self.assertEqual(status, 200)

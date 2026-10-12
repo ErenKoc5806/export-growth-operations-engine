@@ -6,6 +6,7 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from urllib.parse import urlencode
 from unittest.mock import patch
 
 from pilot_engine.access import LocalAccess, Role
@@ -44,6 +45,20 @@ class WindowsSyntheticTests(unittest.TestCase):
                             response = connection.getresponse()
                             self.assertEqual(response.status, 200)
                             self.assertIn("Örnek vakayı başlat".encode(), response.read())
+                            body = urlencode({"csrf": app.csrf, "confirm": "yes"})
+                            connection.request("POST", "/demo", body=body, headers={
+                                "Cookie": cookie,
+                                "Origin": f"http://127.0.0.1:{server.server_port}",
+                                "Content-Type": "application/x-www-form-urlencoded",
+                            })
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 303, response.read())
+                            case_url = response.getheader("Location")
+                            response.read()
+                            connection.request("GET", case_url, headers={"Cookie": cookie})
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertIn("Satış fırsatını aç".encode(), response.read())
                             connection.close()
                         finally:
                             server.shutdown()
