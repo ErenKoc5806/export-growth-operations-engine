@@ -24,7 +24,12 @@ class OperatorWebTests(unittest.TestCase):
         _execute(case, expected, {"confirm": "yes", **(values or {})}, files or {})
 
     def test_guided_visual_case_through_reviewed_documents(self):
-        self.assertIn("Find devirleri".encode(), self.app_handoffs())
+        dashboard = self.app_handoffs().decode()
+        self.assertIn("Find devirleri", dashboard)
+        self.assertIn("<button name='confirm' value='yes'>Örnek vakayı başlat", dashboard)
+        initial_page = _case_page(self.app, self.handoff_id).decode()
+        self.assertIn("<button name='confirm' value='yes'>Satış fırsatını aç", initial_page)
+        self.assertNotIn("Gösterilen kaydı ve bu işlemi inceledim", initial_page)
         self.advance("opportunity")
         self.advance("draft", {**self.sender, "language": "en"})
         page = _case_page(self.app, self.handoff_id).decode()
