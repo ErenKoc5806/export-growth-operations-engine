@@ -93,7 +93,8 @@ class OperatorShipmentTests(unittest.TestCase):
         self.assertIn("Kısmi sevkiyatlar".encode(), page)
         body = urlencode({"action": "create", "quantity": "1", "confirm": "yes",
                           "csrf": "wrong"}).encode()
-        headers = {"Cookie": cookie, "Origin": "http://127.0.0.1:8080",
+        headers = {"Cookie": cookie, "Host": "127.0.0.1:8080",
+                   "Origin": "http://127.0.0.1:8080",
                    "Content-Type": "application/x-www-form-urlencoded",
                    "Content-Length": str(len(body))}
         self.assertEqual(request("do_POST", path, headers, body)[0], 403)

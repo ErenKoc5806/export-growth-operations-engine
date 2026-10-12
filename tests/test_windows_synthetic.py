@@ -48,7 +48,7 @@ class WindowsSyntheticTests(unittest.TestCase):
                             body = urlencode({"csrf": app.csrf, "confirm": "yes"})
                             connection.request("POST", "/demo", body=body, headers={
                                 "Cookie": cookie,
-                                "Origin": f"http://127.0.0.1:{server.server_port}",
+                                # Some desktop browsers omit Origin on a local form POST.
                                 "Content-Type": "application/x-www-form-urlencoded",
                             })
                             response = connection.getresponse()
