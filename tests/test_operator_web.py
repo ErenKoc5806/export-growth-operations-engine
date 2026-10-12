@@ -117,9 +117,15 @@ class OperatorWebTests(unittest.TestCase):
         self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
         body = urlencode({"step": "opportunity", "confirm": "yes", "csrf": self.app.csrf})
         headers["Content-Length"] = str(len(body))
+        headers["Origin"] = "null"
+        self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
+        headers["Sec-Fetch-Site"] = "same-origin"
         self.assertEqual(request("do_POST", path, headers, body.encode())[0], 303)
         self.assertEqual(self.app.step(self.app.chain(self.handoff_id)), "draft")
         headers["Origin"] = "http://example.com"
+        self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
+        headers["Origin"] = "null"
+        headers["Sec-Fetch-Site"] = "cross-site"
         self.assertEqual(request("do_POST", path, headers, body.encode())[0], 403)
         del headers["Origin"]
         headers["Sec-Fetch-Site"] = "cross-site"

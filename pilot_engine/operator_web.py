@@ -905,8 +905,10 @@ def make_handler(app: OperatorWeb):
             expected_origin = f"http://127.0.0.1:{self.server.server_port}"
             origin = self.headers.get("Origin")
             fetch_site = self.headers.get("Sec-Fetch-Site")
+            local_opaque_origin = origin == "null" and fetch_site == "same-origin"
             if (self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
-                    or (origin is not None and origin != expected_origin)
+                    or (origin is not None and origin != expected_origin
+                        and not local_opaque_origin)
                     or fetch_site == "cross-site"):
                 self._send(HTTPStatus.FORBIDDEN, _layout(
                     "<h2>Formun kaynağı doğrulanamadı</h2><p>PowerShell penceresindeki "
