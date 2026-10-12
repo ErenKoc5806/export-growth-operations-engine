@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 from threading import Barrier
+from unittest.mock import patch
 
 from pilot_engine.access import LocalAccess, Role
 from pilot_engine.domain import OpportunityStatus
@@ -97,10 +98,10 @@ class PilotStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already has an approval"):
             store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
         with closing(sqlite3.connect(self.path)) as db, db:
-            with self.assertRaisesRegex(sqlite3.IntegrityError, "approvals are append-only"):
-                db.execute("UPDATE approval SET decision = 'REJECTED' WHERE action = 'APPROVE_QUOTE'")
-            with self.assertRaisesRegex(sqlite3.IntegrityError, "approvals are append-only"):
-                db.execute("DELETE FROM approval WHERE action = 'APPROVE_QUOTE'")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "approval events are append-only"):
+                db.execute("UPDATE approval_event SET decision = 'REJECTED' WHERE action = 'APPROVE_QUOTE'")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "approval events are append-only"):
+                db.execute("DELETE FROM approval_event WHERE action = 'APPROVE_QUOTE'")
         with self.assertRaisesRegex(ValueError, "quotation revision approval"):
             store.transition(oid, OpportunityStatus.QUOTE_APPROVED,
                              approval_target_id="Q-SYN-001", approval_revision=99)
@@ -136,6 +137,69 @@ class PilotStoreTests(unittest.TestCase):
                 db.execute("UPDATE opportunity SET status = 'GIBBERISH'")
         self.assertEqual(store.read_summary(self.case["opportunity_id"])["quotation_revisions"], 1)
 
+    def test_latest_quote_and_po_decisions_control_future_transitions(self):
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        clock = patch("pilot_engine.store._utc_now", return_value="2026-10-12T20:00:00+00:00")
+        clock.start()
+        self.addCleanup(clock.stop)
+        oid = self.case["opportunity_id"]
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("UPDATE opportunity SET status = 'QUOTE_REVIEW' WHERE id = ?", (oid,))
+        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
+        store.decide_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1,
+                              "REVOKED", "Manufacturer withdrew test price")
+        with self.assertRaisesRegex(ValueError, "quotation revision approval"):
+            store.transition(oid, OpportunityStatus.QUOTE_APPROVED,
+                             approval_target_id="Q-SYN-001", approval_revision=1)
+        with self.assertRaisesRegex(ValueError, "Reapproval needs"):
+            store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
+        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1,
+                              "Reviewed unchanged synthetic price again")
+        store.transition(oid, OpportunityStatus.QUOTE_APPROVED,
+                         approval_target_id="Q-SYN-001", approval_revision=1)
+        store.transition(oid, OpportunityStatus.PO_REVIEW)
+        store.record_approval(oid, "APPROVE_PO", "PO-SYN-001", 1)
+        store.decide_approval(oid, "APPROVE_PO", "PO-SYN-001", 1,
+                              "REJECTED", "Customer PO needs review")
+        with self.assertRaisesRegex(ValueError, "customer PO approval"):
+            store.transition(oid, OpportunityStatus.ORDER_DRAFT,
+                             approval_target_id="PO-SYN-001", approval_revision=1)
+        store.record_approval(oid, "APPROVE_PO", "PO-SYN-001", 1,
+                              "Reviewed unchanged synthetic PO again")
+        store.transition(oid, OpportunityStatus.ORDER_DRAFT,
+                         approval_target_id="PO-SYN-001", approval_revision=1)
+        with closing(store._connect()) as db:
+            rows = db.execute("""SELECT sequence, id, decision, content_hash, decided_at_utc
+                FROM approval_event ORDER BY sequence""").fetchall()
+            self.assertEqual([r["decision"] for r in rows],
+                             ["APPROVED", "REVOKED", "APPROVED", "APPROVED", "REJECTED", "APPROVED"])
+            self.assertEqual([r["sequence"] for r in rows], list(range(1, 7)))
+            self.assertEqual(len({r["id"] for r in rows}), 6)
+            self.assertTrue(all(r["content_hash"] for r in rows))
+            self.assertEqual(len({r["decided_at_utc"] for r in rows}), 1)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "approval events are append-only"):
+                db.execute("UPDATE approval_event SET decision = 'APPROVED' WHERE sequence = 2")
+
+    def test_revocation_requires_effective_approval_reason_and_authorized_actor(self):
+        store = PilotStore(self.path)
+        store.save_synthetic_case(self.case)
+        oid = self.case["opportunity_id"]
+        with self.assertRaisesRegex(ValueError, "effective approval"):
+            store.decide_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "REVOKED", "test")
+        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
+        with self.assertRaisesRegex(ValueError, "reason"):
+            store.decide_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "REVOKED", "")
+        viewer = PilotStore(self.path, access=LocalAccess({os.geteuid(): Role.VIEWER}))
+        with self.assertRaises(PermissionError):
+            viewer.decide_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1,
+                                   "REVOKED", "Unauthorized")
+        store.decide_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1,
+                              "REVOKED", "Reviewed withdrawal")
+        with self.assertRaisesRegex(ValueError, "effective approval"):
+            store.decide_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1,
+                                  "REVOKED", "Repeated withdrawal")
+
     def test_outreach_requires_approval_for_exact_content(self):
         store = PilotStore(self.path)
         store.save_synthetic_case(self.case)
@@ -167,7 +231,7 @@ class PilotStoreTests(unittest.TestCase):
         store = PilotStore(self.path)
         store.save_synthetic_case(self.case)
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 28)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 29)
 
     def test_v1_upgrade_rejects_existing_invalid_quote(self):
         migration = Path(__file__).resolve().parents[1] / "pilot_engine" / "migrations" / "001_initial.sql"
@@ -191,8 +255,10 @@ class PilotStoreTests(unittest.TestCase):
         store = PilotStore(self.path)
         store.save_synthetic_case(self.case)
         oid = self.case["opportunity_id"]
-        store.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1)
         with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("""INSERT INTO approval VALUES
+                ('APPROVE_QUOTE:Q-SYN-001:1', ?, 'APPROVE_QUOTE',
+                 'Q-SYN-001', 1, NULL, 'uid:legacy', 'APPROVED', '2026-10-03T00:00:00Z')""", (oid,))
             for table in ("sell_quotation_decision", "sell_quotation_revision", "sell_quotation", "sell_price_authority"):
                 db.execute(f"DROP TABLE {table}")
             for table in ("sell_rfq_decision", "sell_rfq_revision", "sell_rfq"):
@@ -238,6 +304,9 @@ class PilotStoreTests(unittest.TestCase):
             db.execute("DROP TABLE product_profile_revision")
             db.execute("DROP TRIGGER approval_no_update")
             db.execute("DROP TRIGGER approval_no_delete")
+            db.execute("DROP TRIGGER approval_event_no_update")
+            db.execute("DROP TRIGGER approval_event_no_delete")
+            db.execute("DROP TABLE approval_event")
             db.execute("PRAGMA user_version = 3")
 
         barrier = Barrier(4)
@@ -250,10 +319,15 @@ class PilotStoreTests(unittest.TestCase):
             results = list(pool.map(open_after_barrier, range(4)))
         self.assertTrue(all(result["id"] == oid for result in results))
         with closing(sqlite3.connect(self.path)) as db, db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 28)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 29)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM approval").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM approval_event").fetchone()[0], 1)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "approvals are append-only"):
                 db.execute("DELETE FROM approval")
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("UPDATE opportunity SET status = 'QUOTE_REVIEW' WHERE id = ?", (oid,))
+        PilotStore(self.path).transition(oid, OpportunityStatus.QUOTE_APPROVED,
+                                         approval_target_id="Q-SYN-001", approval_revision=1)
 
     def test_os_role_controls_contact_approval_and_records_denials(self):
         admin = PilotStore(self.path)
@@ -269,7 +343,8 @@ class PilotStoreTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             viewer.transition(oid, OpportunityStatus.DOCUMENT_REVIEW)
         with self.assertRaises(TypeError):
-            admin.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1, "Forged actor")
+            admin.record_approval(oid, "APPROVE_QUOTE", "Q-SYN-001", 1,
+                                  "Reviewed", "Forged actor")
         contact = admin.read_contact(f"C-{oid}")
         self.assertEqual(contact["business_email"], "purchasing@example.com")
         with closing(sqlite3.connect(self.path)) as db, db:
