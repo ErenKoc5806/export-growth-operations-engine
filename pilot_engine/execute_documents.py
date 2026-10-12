@@ -27,6 +27,8 @@ class ExecuteDocuments:
         actor = self.store._require_access("APPROVE_EXECUTE", order_id)
         if not isinstance(hs_code, str) or not re.fullmatch(r"[0-9]{6}([0-9]{2})?([0-9]{2})?", hs_code):
             raise ValueError("Reviewed HS classification needs 6, 8 or 10 digits")
+        if not hs_code.startswith(self.store.scope.hs6):
+            raise ValueError("Reviewed HS classification must match the approved product HS6")
         if (not isinstance(origin_country_code, str) or
                 not re.fullmatch(r"[A-Z]{2}", origin_country_code)):
             raise ValueError("Reviewed origin needs an ISO country code")

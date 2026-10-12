@@ -449,7 +449,8 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         fields += _field("destination_review_ref", "Hedef ülke fatura gereklilikleri incelemesi", "SYN-DE-INVOICE-REVIEW")
         evidence = "Ticari fatura taslağıdır; düzenlenmiş yasal fatura değildir."
     elif step == "export-facts":
-        fields += _field("hs_code", "Üretici tarafından incelenmiş HS kodu", "732690")
+        fields += _field("hs_code", "Üretici tarafından incelenmiş HS kodu",
+                         case["store"].scope.hs6)
         fields += _field("classification_evidence_ref", "Sınıflandırma kanıtı", "SYN-HS-REVIEW")
         fields += _field("origin_country_code", "Menşe ülke kodu", "TR")
         fields += _field("origin_evidence_ref", "Menşe kanıtı", "SYN-ORIGIN-REVIEW")

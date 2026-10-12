@@ -144,6 +144,15 @@ class ExecuteDocumentsTests(unittest.TestCase):
             self.documents.review_export_facts(self.order_id, hs_code="732690",
                 classification_evidence_ref="real-document", origin_country_code="TR",
                 origin_evidence_ref="SYN-ORIGIN", manufacturer_review_ref="SYN-MFG")
+        for code in ("999999", "99999900", "9999990000"):
+            with self.subTest(code=code), self.assertRaisesRegex(ValueError, "product HS6"):
+                self.documents.review_export_facts(self.order_id, hs_code=code,
+                    classification_evidence_ref="SYN-HS", origin_country_code="TR",
+                    origin_evidence_ref="SYN-ORIGIN", manufacturer_review_ref="SYN-MFG")
+        self.assertIsInstance(self.documents.review_export_facts(self.order_id,
+            hs_code="73269090", classification_evidence_ref="SYN-HS",
+            origin_country_code="TR", origin_evidence_ref="SYN-ORIGIN",
+            manufacturer_review_ref="SYN-MFG"), int)
 
 
 if __name__ == "__main__":
