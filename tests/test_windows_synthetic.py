@@ -2,12 +2,15 @@ import os
 import tempfile
 import unittest
 from contextlib import closing
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 from pilot_engine.access import LocalAccess, Role
 from pilot_engine.config import AppConfig
-from pilot_engine.operator_web import OperatorWeb, _dashboard
+from pilot_engine.operator_web import OperatorWeb, _dashboard, make_handler
 from pilot_engine.synthetic_demo import create_demo_handoff
 
 
@@ -26,6 +29,25 @@ class WindowsSyntheticTests(unittest.TestCase):
                 app = OperatorWeb(config)
                 create_demo_handoff(app.store)
                 self.assertIn("Örnek vakayı başlat".encode(), _dashboard(app))
+                if os.name == "nt":
+                    with ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app)) as server:
+                        thread = Thread(target=server.serve_forever, daemon=True)
+                        thread.start()
+                        try:
+                            connection = HTTPConnection("127.0.0.1", server.server_port)
+                            connection.request("GET", "/?token=" + app.session)
+                            response = connection.getresponse()
+                            cookie = response.getheader("Set-Cookie").split(";", 1)[0]
+                            self.assertEqual(response.status, 303)
+                            response.read()
+                            connection.request("GET", "/", headers={"Cookie": cookie})
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertIn("Örnek vakayı başlat".encode(), response.read())
+                            connection.close()
+                        finally:
+                            server.shutdown()
+                            thread.join(timeout=5)
                 with self.assertRaisesRegex(RuntimeError, "Canlı pilot"):
                     AppConfig.from_env({**values, "EGO_ENV": "pilot"})
                 with self.assertRaisesRegex(ValueError, "EGO_DATA_DIR"):
