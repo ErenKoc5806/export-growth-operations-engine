@@ -3,9 +3,9 @@
 Bu denemeyi yazılım geliştirme deneyimi olmayan bir dış ticaret veya satış
 operatörü yapmalı. Gerçek müşteri, fiyat veya belge kullanılmaz. Yönetici,
 `operator-web.md` içindeki yerel uygulamayı açar ve yalnızca tarayıcı
-bağlantısını operatöre verir. Windows üzerinde yerel POSIX güvenlik kontrolleri
-nedeniyle WSL veya bir POSIX makine gerekir. Denemenin çıktısını gerçek pilot
-verisi veya gerçek sevkiyat saymayın.
+bağlantısını operatöre verir. Windows PowerShell'de Python 3.12 ile sentetik
+deneme açılabilir; WSL gerekmez. Denemenin çıktısını gerçek pilot verisi veya
+gerçek sevkiyat saymayın.
 
 1. Operatör **Örnek vakayı başlat** ile uydurma vakayı açar. Yardımcı kişi
    işlem alanlarını doldurmaz; yalnızca güvenlik ve kurulum sorunlarında yardım

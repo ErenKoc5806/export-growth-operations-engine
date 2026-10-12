@@ -18,6 +18,12 @@ from pilot_engine.workflow import PilotResult, run_case, validate_quotation_revi
 
 
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
+
+
+def _windows_host() -> bool:
+    return os.name == "nt"
+
+
 MIGRATION_FILES = (
     "001_initial.sql", "002_validation.sql", "003_access.sql",
     "004_immutable_approval.sql", "005_product_profile.sql",
@@ -70,10 +76,18 @@ class PilotStore:
     def __init__(
         self, path: str | Path, scope: PilotScope = DEFAULT_PILOT_SCOPE,
         access: LocalAccess | None = None,
+        synthetic_windows: bool = False,
     ):
         self.path = Path(path)
         self.scope = scope
         self.access = access if access is not None else LocalAccess.single_operator()
+        if synthetic_windows:
+            root = os.environ.get("LOCALAPPDATA")
+            if not _windows_host() or not root:
+                raise RuntimeError("Windows sentetik veri yolu yalnızca Windows'ta açılır")
+            expected = Path(root).resolve() / "ExportGrowthOperations" / "SyntheticTrial"
+            if self.path.parent.resolve() != expected or self.path.parent.is_symlink():
+                raise PermissionError("Sentetik veritabanı yalnızca yerel deneme klasöründe açılır")
         if str(self.path) == ":memory:":
             raise ValueError("Use a file path for durable pilot storage")
         self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -86,8 +100,9 @@ class PilotStore:
             except FileExistsError:
                 pass
         metadata = self.path.stat()
-        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != current_uid()
-                or metadata.st_mode & 0o077):
+        if (not stat.S_ISREG(metadata.st_mode) or
+                (not synthetic_windows and (metadata.st_uid != current_uid()
+                                            or metadata.st_mode & 0o077))):
             raise PermissionError("Database must be owner-only and owned by the process UID")
         with closing(self._connect()) as db:
             # Serialize version inspection and upgrade on the same SQLite writer lock.
