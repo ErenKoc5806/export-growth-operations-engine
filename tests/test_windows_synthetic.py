@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ class WindowsSyntheticTests(unittest.TestCase):
                 self.assertEqual(config.data_dir, Path(temp) / "ExportGrowthOperations" /
                                  "SyntheticTrial")
                 store = config.open_store()
-                with store._connect() as db:
+                with closing(store._connect()) as db:
                     self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 28)
                 app = OperatorWeb(config)
                 create_demo_handoff(app.store)
