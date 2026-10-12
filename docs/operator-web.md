@@ -32,6 +32,15 @@ File uploads for price and PO are hashed by those services. The invented inbound
 text is kept in an owner-only local evidence file so the reviewer can see what
 they are classifying. No real send, ERP creation, carrier booking or issued
 document is performed. `CAPTURED_NOT_DELIVERED` remains a mock result.
+Dates are entered in the browser's date/time control as Istanbul local time;
+the service stores UTC. At PO review, a side-by-side quotation/PO table lists
+each field and its difference status. An allowed buyer, reduced-quantity,
+reconciled-total or delivery-place change requires individual checkboxes and
+a review reason. If an operator entered a PO field incorrectly, they can
+create a new revision from the form by selecting the **same original PO file**;
+the service checks its original hash. An increased quantity, changed product,
+seller or price cannot be approved as an amendment. No entered correction
+silently overwrites an approved local order.
 
 From an approved order with a manual ERP handoff, **Kısmi sevkiyatlar** opens
 the shipment screen. The operator records confirmed cumulative PARTIAL/READY
@@ -46,10 +55,12 @@ per shipment; the service supports multiple packages. An order that already
 has order-wide freight or documents cannot switch to this path. No JSON entry
 is needed, and actual shipped quantity stays zero.
 
-After a technically complete case, the screen asks for friction and improvement
-notes and appends them to owner-only `operator-feedback.jsonl`. A non-developer
-walkthrough and its actual feedback are still required before #47 is closed.
+After an order is created, **Deneme notlarını kaydet** is available from the
+case and shipment screens. It records the operator's own elapsed minutes,
+corrections, hesitation step, friction and suggestion in owner-only
+`operator-feedback.jsonl`; no time or productivity gain is inferred. The
+non-developer walkthrough in [operator trial](operator-walkthrough.md) and its
+actual observations are still required before #47 is closed.
 The current guided screen handles one synthetic email route and one package;
 it stops and displays unresolved issues when evidence changes or a PO differs.
-The reviewed PO amendment is available in the service and CLI, while its visual
-correction flow remains to be built. #47 remains open for an operator walkthrough.
+#47 remains open for an operator walkthrough and subsequent usability fixes.

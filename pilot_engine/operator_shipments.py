@@ -125,7 +125,7 @@ def _form(action: str, context: dict) -> tuple[str, str]:
 
 def shipment_page(app: object, handoff_id: str, shipment_id: str | None = None,
                   error: str = "") -> bytes:
-    from pilot_engine.operator_web import _field, _h, _layout
+    from pilot_engine.operator_web import _date_field, _field, _h, _layout
     context = _context(app, handoff_id, shipment_id)
     summary = context["summary"]
     operation = context["case"]["case"]["operations"]["readiness"]
@@ -133,7 +133,8 @@ def shipment_page(app: object, handoff_id: str, shipment_id: str | None = None,
     ready_text = (f"{ready['status']} · {ready.get('quantity') or '0'} adet"
                   if ready else "Henüz hazırlık teyidi yok")
     base = "/shipments?id=" + _h(handoff_id)
-    content = ("<p><a href='/case?id=" + _h(handoff_id) + "'>← Vakaya dön</a></p>"
+    content = ("<p><a href='/case?id=" + _h(handoff_id) + "'>← Vakaya dön</a> · "
+               "<a href='/feedback?id=" + _h(handoff_id) + "'>Deneme notları</a></p>"
                "<h2>Kısmi sevkiyatlar</h2><div class='card'><strong>Sipariş:</strong> "
                + _h(summary["ordered_quantity"]) + " adet · <strong>Ayrılan:</strong> "
                + _h(summary["allocated_quantity"]) + " · <strong>Kalan:</strong> "
@@ -148,10 +149,11 @@ def shipment_page(app: object, handoff_id: str, shipment_id: str | None = None,
                 "<input type='hidden' name='action' value='readiness'>"
                 + _field("status", "Durum", "PARTIAL", kind="select", choices=("PARTIAL", "READY"))
                 + _field("quantity", "Hazır toplam adet", kind="number")
-                + _field("planned_at_utc", "Planlanan tarih (UTC)",
-                         ready["planned_at_utc"] if ready else datetime.now(timezone.utc).isoformat(timespec="seconds"))
-                + _field("actual_at_utc", "Fiilî teyit tarihi (UTC)",
-                         datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                + _date_field("planned_at_utc", "Planlanan tarih",
+                              ready["planned_at_utc"] if ready else
+                              datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                + _date_field("actual_at_utc", "Fiilî teyit tarihi",
+                              datetime.now(timezone.utc).isoformat(timespec="seconds"))
                 + _field("reason", "Üretici bilgisi / gerekçe")
                 + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Hazırlık kaydını inceledim.</label>'
                 "<button>Hazırlığı kaydet</button></form></div>")
