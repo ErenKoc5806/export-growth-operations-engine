@@ -33,9 +33,23 @@ text is kept in an owner-only local evidence file so the reviewer can see what
 they are classifying. No real send, ERP creation, carrier booking or issued
 document is performed. `CAPTURED_NOT_DELIVERED` remains a mock result.
 
+From an approved order with a manual ERP handoff, **Kısmi sevkiyatlar** opens
+the shipment screen. The operator records confirmed cumulative PARTIAL/READY
+quantity, allocates one or more shipment pieces, and uses labeled forms for
+each piece's freight plan, packing list, reviewed HS/origin facts, invoice draft
+and synthetic carrier observation. The screen shows ordered, allocated and
+remaining quantities. It displays exact document revisions and hashes at
+review, and a change to freight, packing or facts sends stale documents back
+through the relevant form. A previously recorded carrier observation remains
+visible and cannot be silently retried. This first visual form uses one package
+per shipment; the service supports multiple packages. An order that already
+has order-wide freight or documents cannot switch to this path. No JSON entry
+is needed, and actual shipped quantity stays zero.
+
 After a technically complete case, the screen asks for friction and improvement
 notes and appends them to owner-only `operator-feedback.jsonl`. A non-developer
 walkthrough and its actual feedback are still required before #47 is closed.
 The current guided screen handles one synthetic email route and one package;
 it stops and displays unresolved issues when evidence changes or a PO differs.
-Correction/amendment flows and partial shipments remain separate work (#44).
+The reviewed PO amendment is available in the service and CLI, while its visual
+correction flow remains to be built. #47 remains open for an operator walkthrough.

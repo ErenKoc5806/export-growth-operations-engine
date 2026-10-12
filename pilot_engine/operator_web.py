@@ -21,6 +21,8 @@ from pilot_engine.config import AppConfig, Environment
 from pilot_engine.execute_documents import ExecuteDocuments
 from pilot_engine.execute_operations import ExecuteOperations
 from pilot_engine.execute_order import ExecuteOrder
+from pilot_engine.shipments import ExecuteShipments
+from pilot_engine.operator_shipments import shipment_execute, shipment_page
 from pilot_engine.find_handoff import FindHandoff
 from pilot_engine.inbound import InboundResponses
 from pilot_engine.manual_contact import ManualContact
@@ -103,6 +105,12 @@ class OperatorWeb:
                 ids["opportunity"]) if ids["opportunity"] else None)
             ids["rfq"] = (_first(db, "SELECT id FROM sell_rfq WHERE inbound_id = ?",
                                  ids["inbound"]) if ids["inbound"] else None)
+            if not ids["rfq"] and ids["opportunity"]:
+                ids["rfq"] = _first(db, """SELECT id FROM sell_rfq WHERE opportunity_id = ?
+                    ORDER BY rowid DESC LIMIT 1""", ids["opportunity"])
+                if ids["rfq"]:
+                    ids["inbound"] = _first(db, "SELECT inbound_id FROM sell_rfq WHERE id = ?",
+                                             ids["rfq"])
             ids["authority"] = _first(db, """SELECT id FROM sell_price_authority
                 WHERE product_id = ? ORDER BY rowid DESC LIMIT 1""", handoff["product_id"])
             ids["quote"] = (_first(db, "SELECT id FROM sell_quotation WHERE rfq_id = ? "
@@ -145,6 +153,7 @@ class OperatorWeb:
                 result["inbound_text"] = path.read_text(encoding="utf-8")
         if ids["order"]:
             result["case"] = ExecuteDocuments(self.store).case_summary(ids["order"])
+            result["shipment_summary"] = ExecuteShipments(self.store).summary(ids["order"])
         result["documents"] = {key: ExecuteDocuments(self.store).read(value)
                                for key, value in ids["documents"].items()}
         return result
@@ -193,6 +202,9 @@ class OperatorWeb:
                            ("freight_plan", "freight")):
             if operations[kind] is None:
                 return step
+            if kind == "readiness" and (operations[kind]["payload"]["status"] == "PARTIAL"
+                                         or case["shipment_summary"]["shipments"]):
+                return "shipments"
         if "packing" not in case["documents"]:
             return "packing"
         if case["documents"]["packing"]["status"] != "REVIEWED_SYNTHETIC":
@@ -242,6 +254,7 @@ TITLES = {
     "review-packing": "Paketleme taslağını incele",
     "review-checklist": "Belge listesini incele", "blocked": "İnceleme gerekli",
     "complete": "Teknik vaka tamamlandı",
+    "shipments": "Kısmi sevkiyatlar",
 }
 
 
@@ -323,9 +336,15 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         fields += _field("handed_to", "Devir alan kişi", "Örnek operatör")
         evidence = "Manuel devir kaydıdır; ERP'de sipariş açıldığı anlamına gelmez."
     elif step == "readiness":
+        fields += _field("status", "Hazırlık durumu", "PENDING", kind="select",
+                         choices=("PENDING", "PARTIAL", "READY"))
         fields += _field("planned_at_utc", "Planlanan hazırlık zamanı (UTC)", _future(100))
+        fields += _field("actual_at_utc", "Fiilî hazırlık zamanı (PARTIAL/READY için UTC)",
+                         "", required=False)
+        fields += _field("quantity", "Hazır toplam miktar (PARTIAL/READY için)",
+                         "", kind="number", required=False)
         fields += _field("reason", "Kaynak ve durum açıklaması", "Üreticiden sentetik teyit bekleniyor")
-        evidence = "PENDING gözlemi fiziksel hazır olduğunu iddia etmez."
+        evidence = "PARTIAL/READY için fiilî tarih ve üreticinin teyit ettiği kümülatif miktarı girin."
     elif step == "freight":
         fields += _field("pickup", "Alım yeri", "Örnek fabrika")
         fields += _field("delivery", "Teslim yeri", case["case"]["operations"]["order"]["payload"]["incoterm_place"])
@@ -466,9 +485,13 @@ def _execute(case: dict, step: str, values: dict[str, str], files: dict[str, byt
             tax_mapping_ref=required("tax_mapping_ref"), handed_to=required("handed_to"),
             evidence_ref=evidence())
     elif step == "readiness":
+        status = values.get("status", "PENDING").strip()
+        actual = required("actual_at_utc") if status in ("PARTIAL", "READY") else None
         ExecuteOperations(store).readiness(ids["order"], operation_key=evidence(),
-            status="PENDING", planned_at_utc=_utc(required("planned_at_utc")),
-            actual_at_utc=None, quantity=None, source_ref=evidence(), reason=required("reason"))
+            status=status, planned_at_utc=_utc(required("planned_at_utc")),
+            actual_at_utc=_utc(actual) if actual else None,
+            quantity=required("quantity") if actual else None, source_ref=evidence(),
+            reason=required("reason"), operator_confirmed=actual is not None)
     elif step == "freight":
         ExecuteOperations(store).plan_freight(ids["order"], operation_key=evidence(),
             status="REQUESTED", pickup=required("pickup"), delivery=required("delivery"),
@@ -572,6 +595,9 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
                + " · <span class='badge'>SENTETİK</span></p>")
     if error:
         details += "<div class='error'>" + _h(error) + "</div>"
+    if case["ids"]["order"]:
+        details += ("<p><a class='button' href='/shipments?id=" + _h(handoff_id)
+                    + "'>Kısmi sevkiyatlar</a></p>")
     if step == "blocked":
         details += ("<div class='error'>Kaynak, rota, revizyon veya ticari alan yeniden "
                     "inceleme gerektiriyor. İşlem durduruldu; bu ekranda düzeltme "
@@ -591,6 +617,10 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
                     + _field("suggestion", "Neyi değiştirelim?", kind="textarea")
                     + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Geri bildirimi kaydet.</label>'
                     + "<button>Geri bildirimi kaydet</button></form>")
+    elif step == "shipments":
+        details += ("<h3>Kısmi sevkiyat akışı</h3><p>Üretici hazırlık miktarını ve "
+                    "her sevkiyatın belgelerini ayrı ekranda kaydedin.</p><a class='button' "
+                    "href='/shipments?id=" + _h(handoff_id) + "'>Sevkiyatları aç</a>")
     else:
         fields, evidence = _form_for(case, step)
         details += ("<h3>Şimdiki adım: " + _h(TITLES[step]) + "</h3>"
@@ -679,6 +709,14 @@ def make_handler(app: OperatorWeb):
                 raise ValueError("Geçerli bir vaka seçin")
             return ids[0]
 
+        def _shipment_id(self) -> str | None:
+            ids = parse_qs(urlsplit(self.path).query).get("shipment", [])
+            if not ids:
+                return None
+            if len(ids) != 1 or not ids[0].startswith("ES-"):
+                raise ValueError("Geçerli bir sevkiyat seçin")
+            return ids[0]
+
         def do_GET(self) -> None:
             parsed = urlsplit(self.path)
             token = parse_qs(parsed.query).get("token", [])
@@ -693,6 +731,8 @@ def make_handler(app: OperatorWeb):
                     body = _dashboard(app)
                 elif parsed.path == "/case":
                     body = _case_page(app, self._case_id())
+                elif parsed.path == "/shipments":
+                    body = shipment_page(app, self._case_id(), self._shipment_id())
                 else:
                     self._send(HTTPStatus.NOT_FOUND, _layout("<h2>Sayfa bulunamadı</h2>"))
                     return
@@ -725,6 +765,16 @@ def make_handler(app: OperatorWeb):
                     handoff_id = create_demo_handoff(app.store)
                     self._send(HTTPStatus.SEE_OTHER, b"", location="/case?id=" + handoff_id)
                     return
+                if parsed.path == "/shipments":
+                    if files:
+                        raise ValueError("Sevkiyat formu dosya yüklemesi kabul etmez")
+                    handoff_id = self._case_id()
+                    shipment_id = shipment_execute(app, handoff_id, self._shipment_id(), values)
+                    location = "/shipments?id=" + handoff_id
+                    if shipment_id:
+                        location += "&shipment=" + shipment_id
+                    self._send(HTTPStatus.SEE_OTHER, b"", location=location)
+                    return
                 handoff_id = self._case_id()
                 case = app.chain(handoff_id)
                 case["store"] = app.store
@@ -739,7 +789,9 @@ def make_handler(app: OperatorWeb):
                 self._send(HTTPStatus.SEE_OTHER, b"", location="/case?id=" + handoff_id)
             except (ValueError, KeyError, TypeError, OSError) as exc:
                 try:
-                    body = _case_page(app, self._case_id(), str(exc))
+                    body = (shipment_page(app, self._case_id(), self._shipment_id(), str(exc))
+                            if parsed.path == "/shipments" else
+                            _case_page(app, self._case_id(), str(exc)))
                 except (ValueError, KeyError):
                     body = _layout("<h2>İşlem durduruldu</h2><p>" + _h(exc) + "</p>")
                 self._send(HTTPStatus.BAD_REQUEST, body)

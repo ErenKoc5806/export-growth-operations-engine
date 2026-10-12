@@ -90,5 +90,6 @@ Existing order-wide freight and document records cannot be mixed with the
 shipment path. The operator console exposes `shipment-create`,
 `shipment-freight`, `shipment-packing`, `shipment-invoice`,
 `shipment-document-review` and `shipment-booking`, with corresponding read
-views. The guided visual case still follows the full-order path; shipment
-forms remain a task for the visual operator workspace.
+views. The visual workspace also offers one-package forms for each partial
+shipment and its document review; complex multipackage entry remains available
+through the service layer.
