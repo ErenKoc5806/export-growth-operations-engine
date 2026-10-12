@@ -473,8 +473,6 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         kind = step.removeprefix("review-")
         fields += _field("reason", "Belge taslağı inceleme gerekçesi")
         evidence = json.dumps(case["documents"][kind]["payload"], ensure_ascii=False, indent=2)
-    if step not in ("blocked", "complete"):
-        fields += '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Gösterilen kaydı ve bu işlemi inceledim.</label>'
     return fields, evidence
 
 
@@ -651,9 +649,8 @@ def _dashboard(app: OperatorWeb) -> bytes:
     demo = ("<div class='card'><h3>İlk deneme</h3><p>Gerçek veri girmeden tüm akışı "
             "denemek için uydurma bir örnek vaka hazırlayın.</p>"
             "<form method='post' action='/demo'><input type='hidden' name='csrf' value='"
-            + _h(app.csrf) + "'><label class='check'><input type='checkbox' name='confirm' "
-            "value='yes' required>Verilerin tamamen örnek olduğunu anlıyorum.</label>"
-            "<button>Örnek vakayı başlat</button></form></div>")
+            + _h(app.csrf) + "'><button name='confirm' value='yes'>"
+            "Örnek vakayı başlat</button></form></div>")
     return _layout("<h2>Find devirleri</h2><p class='muted'>Bir vakayı seçerek ekrandaki "
                    "adımları ilerletin. ID veya JSON girmeniz gerekmez.</p>"
                    + demo + ("".join(cards) if cards else
@@ -727,7 +724,8 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
                     "<form method='post' enctype='multipart/form-data' action='/case?id="
                     + _h(handoff_id) + "'><input type='hidden' name='csrf' value='"
                     + _h(app.csrf) + "'><input type='hidden' name='step' value='"
-                    + _h(step) + "'>" + fields + "<button>" + _h(TITLES[step])
+                    + _h(step) + "'>" + fields + "<button name='confirm' value='yes'>"
+                    + _h(TITLES[step])
                     + "</button></form>")
         if step == "approve-po":
             correction_fields, correction_evidence = _form_for(case, "correct-po")
@@ -737,7 +735,8 @@ def _case_page(app: OperatorWeb, handoff_id: str, error: str = "") -> bytes:
                         "<form method='post' enctype='multipart/form-data' action='/case?id="
                         + _h(handoff_id) + "'><input type='hidden' name='csrf' value='"
                         + _h(app.csrf) + "'><input type='hidden' name='step' value='correct-po'>"
-                        + correction_fields + "<button>PO girişini düzelt</button></form></details>")
+                        + correction_fields + "<button name='confirm' value='yes'>"
+                        "PO girişini düzelt</button></form></details>")
     details += "</div>"
     return _layout("<div class='grid'>" + sidebar + details + "</div>")
 
@@ -787,8 +786,7 @@ def _feedback_page(app: OperatorWeb, handoff_id: str, *, saved: bool = False,
                 + _field("hesitation_step", "En çok duraksadığınız adım")
                 + _field("friction", "Nerede zorlandınız?", kind="textarea")
                 + _field("suggestion", "Ne değişirse kolaylaşır?", kind="textarea")
-                + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Bu kendi deneme gözlemimdir.</label>'
-                + "<button>Deneme notlarını kaydet</button></form>")
+                + "<button name='confirm' value='yes'>Deneme notlarını kaydet</button></form>")
     return _layout(content)
 
 

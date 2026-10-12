@@ -30,6 +30,8 @@ class OperatorShipmentTests(unittest.TestCase):
     def test_buttons_create_two_shipments_and_review_independent_documents(self):
         page = shipment_page(self.app, self.handoff_id).decode()
         self.assertIn("Hazır toplam adet", page)
+        self.assertIn("<button name='confirm' value='yes'>Hazırlığı kaydet", page)
+        self.assertNotIn("Hazırlık kaydını inceledim", page)
         self.readiness("60", "PARTIAL")
         self.assertIn("Hazır toplam adet", shipment_page(self.app, self.handoff_id).decode())
         first = self.act("create", quantity="60")

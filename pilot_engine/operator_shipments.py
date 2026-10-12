@@ -155,8 +155,7 @@ def shipment_page(app: object, handoff_id: str, shipment_id: str | None = None,
                 + _date_field("actual_at_utc", "Fiilî teyit tarihi",
                               datetime.now(timezone.utc).isoformat(timespec="seconds"))
                 + _field("reason", "Üretici bilgisi / gerekçe")
-                + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Hazırlık kaydını inceledim.</label>'
-                "<button>Hazırlığı kaydet</button></form></div>")
+                + "<button name='confirm' value='yes'>Hazırlığı kaydet</button></form></div>")
     content += "<div class='grid'><div class='panel'><h3>Sevkiyat parçaları</h3>"
     for index, item in enumerate(summary["shipments"], 1):
         content += ("<div class='row'><a href='" + base + "&shipment=" + _h(item["id"])
@@ -191,8 +190,8 @@ def shipment_page(app: object, handoff_id: str, shipment_id: str | None = None,
                     + ("&shipment=" + _h(shipment_id) if shipment_id else "")
                     + "'><input type='hidden' name='csrf' value='" + _h(app.csrf)
                     + "'><input type='hidden' name='action' value='" + _h(action) + "'>"
-                    + fields + '<label class="check"><input type="checkbox" name="confirm" value="yes" required>Alanları ve kanıtı inceledim.</label>'
-                    + "<button>" + _h(titles[action]) + "</button></form>")
+                    + fields + "<button name='confirm' value='yes'>"
+                    + _h(titles[action]) + "</button></form>")
     content += "</div></div>"
     return _layout(content)
 
