@@ -26,3 +26,14 @@ jobs:
       - run: python -m compileall -q pilot_engine tests
       - run: python -m pilot_engine > /dev/null
       - run: python tools/check_style.py
+  windows-synthetic:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Windows synthetic operator startup
+        run: python -m unittest discover -s tests -p test_windows_synthetic.py -v

@@ -12,6 +12,21 @@ from typing import Mapping
 from pilot_engine.domain import DEFAULT_PILOT_SCOPE, PilotScope
 
 
+def _windows_host() -> bool:
+    return os.name == "nt"
+
+
+def _windows_trial_dir(env: Mapping[str, str]) -> Path:
+    root = env.get("LOCALAPPDATA")
+    if not root:
+        raise ValueError("Windows sentetik denemesi için LOCALAPPDATA gerekli")
+    directory = Path(root) / "ExportGrowthOperations" / "SyntheticTrial"
+    if directory.parent.is_symlink() or directory.is_symlink():
+        raise PermissionError("Sentetik deneme klasörü bağlantı olamaz")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
@@ -32,6 +47,8 @@ class AppConfig:
             stage = Environment(env.get("EGO_ENV", "development"))
         except ValueError as exc:
             raise ValueError("EGO_ENV must be development, test, or pilot") from exc
+        if _windows_host() and stage is Environment.PILOT:
+            raise RuntimeError("Canlı pilot Windows üzerinde desteklenmiyor; yalnızca sentetik deneme")
 
         fields = ("EGO_HS6", "EGO_COUNTRY", "EGO_CURRENCY")
         if stage is Environment.PILOT and any(not env.get(field) for field in fields):
@@ -51,6 +68,13 @@ class AppConfig:
             raise ValueError("EGO_CURRENCY must be a three-letter uppercase currency code")
 
         raw_dir = env.get("EGO_DATA_DIR")
+        if _windows_host() and stage is not Environment.PILOT:
+            if raw_dir:
+                raise ValueError("Windows sentetik denemesinde EGO_DATA_DIR ayarlamayın")
+            data_dir = _windows_trial_dir(env)
+            if env.get("EGO_SECRET_DIR"):
+                raise ValueError("Windows sentetik denemesinde gizli anahtar klasörü kullanılamaz")
+            return cls(stage, scope, data_dir)
         if stage is Environment.PILOT and not raw_dir:
             raise ValueError("Pilot requires EGO_DATA_DIR")
         data_dir = Path(raw_dir).expanduser() if raw_dir else None
@@ -75,7 +99,8 @@ class AppConfig:
             raise ValueError("EGO_DATA_DIR is required to open a database")
         from pilot_engine.store import PilotStore
 
-        return PilotStore(self.data_dir / "pilot.sqlite3", scope=self.scope)
+        return PilotStore(self.data_dir / "pilot.sqlite3", scope=self.scope,
+                          synthetic_windows=_windows_host() and self.environment is not Environment.PILOT)
 
     def open_secrets(self):
         """Return the local secret source only when a connector needs one."""

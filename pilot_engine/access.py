@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import getpass
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -63,16 +64,28 @@ def current_uid() -> int:
     return os.geteuid()
 
 
+def current_principal() -> int | str:
+    """Use the local account label for synthetic Windows trials only.
+
+    Windows usernames are not an authentication boundary for a live pilot.
+    Database and secret access remain disabled there outside the synthetic UI.
+    """
+    if hasattr(os, "geteuid"):
+        return current_uid()
+    return "windows:" + getpass.getuser()
+
+
 @dataclass(frozen=True)
 class LocalAccess:
-    roles_by_uid: dict[int, Role]
+    roles_by_uid: dict[int | str, Role]
 
     @classmethod
     def single_operator(cls) -> LocalAccess:
         """Development default: the current OS account is the sole administrator."""
-        return cls({current_uid(): Role.ADMIN})
+        return cls({current_principal(): Role.ADMIN})
 
     def decision(self, permission: str) -> tuple[str, bool]:
-        uid = current_uid()
-        role = self.roles_by_uid.get(uid)
-        return f"uid:{uid}", role is not None and permission in PERMISSIONS[role]
+        principal = current_principal()
+        role = self.roles_by_uid.get(principal)
+        actor = f"uid:{principal}" if isinstance(principal, int) else principal
+        return actor, role is not None and permission in PERMISSIONS[role]

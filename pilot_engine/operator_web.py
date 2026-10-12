@@ -16,7 +16,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pilot_engine.config import AppConfig, Environment
 from pilot_engine.execute_documents import ExecuteDocuments
@@ -33,7 +33,12 @@ from pilot_engine.sell_delivery import CaptureMailbox, SellDelivery
 from pilot_engine.sell_drafts import SellDrafts
 from pilot_engine.synthetic_demo import create_demo_handoff
 
-ISTANBUL = ZoneInfo("Europe/Istanbul")
+try:
+    ISTANBUL = ZoneInfo("Europe/Istanbul")
+except ZoneInfoNotFoundError:
+    # Windows Python may not include an IANA time-zone database. This UI is
+    # synthetic-only; local date widgets can use Türkiye's current +03 offset.
+    ISTANBUL = timezone(timedelta(hours=3))
 
 
 def _h(value: object) -> str:

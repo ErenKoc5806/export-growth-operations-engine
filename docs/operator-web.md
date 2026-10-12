@@ -4,7 +4,19 @@ The local visual workspace starts from a **prepared synthetic Find handoff**.
 The operator opens a case in a browser and follows one screen at a time through
 Sell and Execute. It supplies labeled forms and buttons; the operator does not
 edit JSON, copy IDs, use Python APIs or run a command for each action. An
-administrator starts the local process once on a POSIX host:
+administrator starts the local process once. On Windows, open PowerShell in
+the repository folder (Python 3.12 required):
+
+```powershell
+py -3.12 -m pilot_engine.operator_web
+```
+
+This Windows path is **synthetic development only**. The SQLite database lives
+under `%LOCALAPPDATA%\ExportGrowthOperations\SyntheticTrial`. Windows refuses
+pilot mode, custom `EGO_DATA_DIR` and secret directories. No Ubuntu or WSL is
+required; do not enter real customer or commercial data.
+
+On POSIX, the existing owner-only path is:
 
 ```bash
 export EGO_ENV=development
@@ -12,7 +24,7 @@ export EGO_DATA_DIR=/path/to/owner-only-directory
 python -m pilot_engine.operator_web
 ```
 
-`EGO_DATA_DIR` must already exist, be owned by the OS account and have mode
+On POSIX, `EGO_DATA_DIR` must already exist, be owned by the OS account and have mode
 `0700`. The process prints and opens a one-time local URL. It binds only to
 `127.0.0.1`, creates an unguessable session cookie, checks a per-process CSRF
 token and Origin on writes, and does not log form contents. Stop it with Ctrl-C.
