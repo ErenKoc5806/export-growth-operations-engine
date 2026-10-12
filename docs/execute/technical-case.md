@@ -10,6 +10,14 @@ revoked quotation blocks the order. Once accepted, the order retains its exact
 PO hash, quotation revision and quote-approval timestamp; later quote expiry
 does not suspend fulfillment. A PO decision revocation still makes the order
 review-required, and a created order cannot be silently replaced by a corrected PO.
+An explicitly reviewed PO amendment can accept a buyer-name, reduced quantity,
+reconciled total or delivery-place difference. The reviewer must select every
+displayed difference on the exact PO payload and cite a reason. Changes to
+seller, SKU, unit, price, currency or delivery rule require a new quotation;
+invalid line arithmetic cannot be overridden. An accepted amendment creates
+an immutable local order commercial version 2 and an append-only event bound
+to the original PO byte hash, exact payload hash, quotation revision, actor and
+decision. This synthetic version does not issue a revised commercial offer.
 The original PO bytes are **hashed, not stored**; the source reference must be
 retained by the operator. Only `SYN-` evidence is accepted in this slice.
 

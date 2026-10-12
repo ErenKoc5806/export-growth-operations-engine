@@ -184,7 +184,7 @@ class OperatorWeb:
             return "blocked"
         if not ids["po"]:
             return "po"
-        if case["po"]["status"] == "DRAFT":
+        if case["po"]["status"] in ("DRAFT", "REVIEW_REQUIRED") and not ids["order"]:
             return "approve-po"
         if not ids["order"] or case["case"]["operations"]["order"]["status"] != "LOCAL_ORDER_SYNTHETIC":
             return "blocked"
@@ -314,6 +314,9 @@ def _form_for(case: dict, step: str) -> tuple[str, str]:
         fields += _field("reason", "PO onay gerekçesi")
         evidence = (json.dumps(case["po"]["payload"], ensure_ascii=False, indent=2)
                     + "\nUyuşmazlıklar: " + ", ".join(case["po"]["differences"]))
+        for difference in case["po"]["differences"]:
+            fields += (f'<label class="check"><input type="checkbox" name="review_{difference}" '
+                       f'value="yes" required>{difference} farkını özgün PO ve teklif ile inceledim.</label>')
     elif step == "erp":
         fields += _field("customer_mapping_ref", "ERP müşteri eşleme referansı", "SYN-CUSTOMER-MAP")
         fields += _field("tax_mapping_ref", "Vergi eşleme referansı", "SYN-TAX-MAP")
@@ -454,7 +457,9 @@ def _execute(case: dict, step: str, values: dict[str, str], files: dict[str, byt
     elif step == "approve-po":
         po = case["po"]
         ExecuteOrder(store).decide(ids["po"], po["revision"], "APPROVE",
-            expected_payload_sha256=po["payload_sha256"], reason=required("reason"))
+            expected_payload_sha256=po["payload_sha256"], reason=required("reason"),
+            reviewed_differences=[key for key in po["differences"]
+                                  if values.get("review_" + key) == "yes"])
     elif step == "erp":
         ExecuteOperations(store).manual_erp_handoff(ids["order"], operation_key=evidence(),
             customer_mapping_ref=required("customer_mapping_ref"),
