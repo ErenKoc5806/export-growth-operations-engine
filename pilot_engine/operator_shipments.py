@@ -87,7 +87,7 @@ def _form(action: str, context: dict) -> tuple[str, str]:
         evidence = "Miktar, net/brüt ağırlık ve ölçüler navlun planıyla eşleşmeli."
     elif action == "export-facts":
         for key, label, value in (
-                ("hs_code", "Üreticinin incelediği HS kodu", "732690"),
+                ("hs_code", "Üreticinin incelediği HS kodu", app.store.scope.hs6),
                 ("classification_evidence_ref", "Sınıflandırma kanıtı", "SYN-HS-REVIEW"),
                 ("origin_country_code", "Menşe ülke kodu", "TR"),
                 ("origin_evidence_ref", "Menşe kanıtı", "SYN-ORIGIN-REVIEW"),
