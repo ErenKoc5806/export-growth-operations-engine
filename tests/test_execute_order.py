@@ -68,6 +68,49 @@ class ExecuteOrderTests(unittest.TestCase):
                                 expected_payload_sha256=self.execute.read(po_id)["payload_sha256"],
                                 reason="Stale quote")
 
+    def test_reviewed_po_amendment_is_exact_and_immutable(self):
+        changed = {**self.po, "buyer": "Example Buyer GmbH",
+                   "quantity": "100", "total": "1250.00"}
+        po_id, _ = self.execute.save(self.quote_id, payload=changed, **self.inputs)
+        view = self.execute.read(po_id)
+        self.assertEqual(view["differences"], ["buyer", "quantity", "total"])
+        with self.assertRaisesRegex(ValueError, "exact reviewed amendment"):
+            self.execute.decide(po_id, 1, "APPROVE",
+                expected_payload_sha256=view["payload_sha256"], reason="Missing quantity review",
+                reviewed_differences=["buyer", "total"])
+        with self.assertRaisesRegex(ValueError, "exact PO revision"):
+            self.execute.decide(po_id, 1, "APPROVE",
+                expected_payload_sha256="wrong", reason="Wrong document",
+                reviewed_differences=view["differences"])
+        order_id = self.execute.decide(po_id, 1, "APPROVE",
+            expected_payload_sha256=view["payload_sha256"],
+            reason="Buyer name and partial quantity checked against original PO",
+            reviewed_differences=view["differences"])
+        order = self.execute.read_order(order_id)
+        self.assertEqual(order["status"], "LOCAL_ORDER_SYNTHETIC")
+        self.assertEqual(order["payload"]["commercial_version"], 2)
+        self.assertEqual(order["payload"]["quantity"], "100")
+        self.assertEqual(self.execute.read(po_id)["amendment"]["differences"], view["differences"])
+        self.assertEqual(self.execute.decide(po_id, 1, "APPROVE",
+            expected_payload_sha256=view["payload_sha256"], reason="Replay"), order_id)
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM execute_po_amendment").fetchone()[0], 1)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                db.execute("UPDATE execute_po_amendment SET reason = 'forged'")
+
+    def test_unreviewable_changes_require_new_quote(self):
+        for index, changed in enumerate((
+                {**self.po, "seller": "Other company"},
+                {**self.po, "quantity": "151", "total": "1887.50"},
+                {**self.po, "quantity": "100", "total": "1875.00"})):
+            po_id, _ = self.execute.save(self.quote_id, payload=changed,
+                **{**self.inputs, "source_ref": f"SYN-PO-BAD-{index}"})
+            view = self.execute.read(po_id)
+            with self.assertRaisesRegex(ValueError, "amendment"):
+                self.execute.decide(po_id, 1, "APPROVE",
+                    expected_payload_sha256=view["payload_sha256"], reason="Unsafe variation",
+                    reviewed_differences=view["differences"])
+
     def test_expired_quote_does_not_invalidate_an_already_approved_order(self):
         po_id, _ = self.execute.save(self.quote_id, payload=self.po, **self.inputs)
         order_id = self.execute.decide(

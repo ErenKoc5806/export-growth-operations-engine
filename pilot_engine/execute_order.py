@@ -18,6 +18,7 @@ FIELDS = frozenset({"buyer", "seller", "sku", "description", "quantity", "unit",
                     "requested_delivery_at_utc"})
 MATCH_FIELDS = ("buyer", "seller", "sku", "quantity", "unit", "unit_price",
                 "currency", "total", "incoterm_code", "incoterm_place")
+AMENDABLE_FIELDS = frozenset({"buyer", "quantity", "total", "incoterm_place"})
 
 
 def _amount(value: object) -> Decimal | None:
@@ -169,6 +170,13 @@ class ExecuteOrder:
                                                json.loads(order["payload_json"]).get(
                                                    "po_payload_sha256", row["payload_sha256"]) ==
                                                row["payload_sha256"])
+        amendment = db.execute("""SELECT a.* FROM execute_po_amendment a
+            JOIN execute_local_order o ON o.id = a.order_id WHERE o.po_id = ?""",
+            (po_id,)).fetchone()
+        result["amendment"] = dict(amendment) if amendment else None
+        if result["amendment"]:
+            result["amendment"]["differences"] = json.loads(
+                result["amendment"].pop("differences_json"))
         if decision and decision["decision"] == "REVOKE":
             result["status"] = "REVOKED"
         elif decision and decision["decision"] == "APPROVE" and result["historical_order_approval"]:
@@ -188,7 +196,8 @@ class ExecuteOrder:
             return self._read(db, po_id)
 
     def decide(self, po_id: str, revision: int, decision: str, *,
-               expected_payload_sha256: str, reason: str) -> str | int:
+               expected_payload_sha256: str, reason: str,
+               reviewed_differences: list[str] | None = None) -> str | int:
         actor = self.store._require_access("APPROVE_EXECUTE", po_id)
         reason = _text(reason, "PO decision reason", 2000)
         if decision not in ("APPROVE", "REVOKE"):
@@ -202,7 +211,18 @@ class ExecuteOrder:
             if decision == "APPROVE":
                 if po["status"] == "APPROVED_SYNTHETIC" and existing_order:
                     return existing_order["id"]
-                if po["status"] not in ("DRAFT", "REVOKED") or existing_order:
+                if existing_order or not po["quote_current"]:
+                    raise ValueError("PO mismatch, stale quote or prior order requires review")
+                if po["differences"]:
+                    if (po["status"] != "REVIEW_REQUIRED"
+                            or not isinstance(reviewed_differences, list)
+                            or len(reviewed_differences) != len(set(reviewed_differences))
+                            or sorted(reviewed_differences) != po["differences"]
+                            or not set(po["differences"]) <= AMENDABLE_FIELDS
+                            or _amount(po["payload"]["quantity"]) >
+                            _amount(self._expected(db, po["quotation_id"])[1]["quantity"])):
+                        raise ValueError("PO mismatch needs exact reviewed amendment or a new quote")
+                elif po["status"] not in ("DRAFT", "REVOKED") or reviewed_differences:
                     raise ValueError("PO mismatch, stale quote or prior order requires review")
             elif po["status"] != "APPROVED_SYNTHETIC":
                 raise ValueError("Only an effective approval can be revoked")
@@ -223,12 +243,24 @@ class ExecuteOrder:
                         "po_payload_sha256": po["payload_sha256"],
                         "quotation_id": po["quotation_id"],
                         "quotation_revision": po["quotation_revision"],
-                        "quote_approved_at_utc": quote_approval["decided_at_utc"]}
+                        "quote_approved_at_utc": quote_approval["decided_at_utc"],
+                        "commercial_version": 2 if po["differences"] else 1,
+                        "reviewed_differences": po["differences"],
+                        "original_po_sha256": po["original_sha256"]}
             digest = hashlib.sha256(_json(snapshot).encode()).hexdigest()
             db.execute("""INSERT INTO execute_local_order
                 (id, po_id, po_revision, payload_json, payload_sha256, actor_id, created_at_utc)
                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (order_id, po_id, revision, _json(snapshot), digest, actor, _utc_now()))
+            if po["differences"]:
+                db.execute("""INSERT INTO execute_po_amendment
+                    (order_id, po_id, po_revision, quotation_revision,
+                     original_sha256, payload_sha256, differences_json, reason,
+                     decision_sequence, actor_id, approved_at_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (order_id, po_id, revision, po["quotation_revision"],
+                     po["original_sha256"], po["payload_sha256"],
+                     _json(po["differences"]), reason, cur.lastrowid, actor, _utc_now()))
             return order_id
 
     def _order(self, db: object, order_id: str) -> dict | None:
