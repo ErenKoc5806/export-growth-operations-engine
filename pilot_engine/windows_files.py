@@ -51,7 +51,9 @@ class _FileAPI(_WinAPI):
 
     @contextmanager
     def open(self, path: Path, *, directory: bool = False, attributes=None, create=False):
-        access = 0x00020080 if directory else 0x80020000  # READ_CONTROL + attributes/read
+        # Include FILE_LIST_DIRECTORY, not metadata access alone: Windows sharing
+        # restrictions do not pin a directory opened only for attributes/control.
+        access = 0x00020081 if directory else 0x80020000
         if create:
             access |= 0x40000000  # GENERIC_WRITE; never truncate an existing file
         # Directory ancestors allow other reads/writes but never deletion/rename.
