@@ -1,5 +1,10 @@
 # FND-006 — Single-operator pilot access
 
+Windows development now derives the actor from the process token SID, with no
+username fallback. See [Windows groundwork](../pilot/windows-security.md) for
+the separate opt-in role policy and ACL preflight. The POSIX deployment below is
+not a Windows live-data deployment; live Windows activation is still refused.
+
 ## First deployment choice
 
 The initial deployment is a **single POSIX host, one interactive operator OS account**, with no web endpoint and no shared database access. Login to that host is the authentication step. `PilotStore` derives `uid:<effective UID>` from the operating system rather than accepting an actor name from a request. The database and backup files must be regular files owned by that UID with mode `0600`; opening a more broadly accessible file or a symlink fails. Put the database in a private `0700` directory, do not commit it, and use an encrypted host/backup volume for real contacts.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import getpass
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -65,14 +64,12 @@ def current_uid() -> int:
 
 
 def current_principal() -> int | str:
-    """Use the local account label for synthetic Windows trials only.
-
-    Windows usernames are not an authentication boundary for a live pilot.
-    Database and secret access remain disabled there outside the synthetic UI.
-    """
+    """Derive identity from the OS; Windows never trusts an environment label."""
     if hasattr(os, "geteuid"):
         return current_uid()
-    return "windows:" + getpass.getuser()
+    from pilot_engine.windows_security import current_process_sid
+
+    return "windows-sid:" + current_process_sid()
 
 
 @dataclass(frozen=True)

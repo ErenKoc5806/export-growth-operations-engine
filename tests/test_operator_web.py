@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 from pilot_engine.config import AppConfig, Environment
 from pilot_engine.operator_web import OperatorWeb, _case_page, _execute, _parse_form, make_handler
@@ -110,6 +111,12 @@ class OperatorWebTests(unittest.TestCase):
         self.assertEqual(request("do_GET", "/")[0], 403)
         self.assertEqual(request("do_GET", "/?token=" + self.app.session)[0], 303)
         cookie = "ego_session_8080=" + self.app.session
+        with patch("pilot_engine.access.current_principal", return_value="windows-sid:other"):
+            self.assertEqual(request("do_GET", "/?token=" + self.app.session)[0], 403)
+            self.assertEqual(request("do_GET", "/", {"Cookie": cookie})[0], 403)
+            self.assertEqual(request("do_POST", "/demo", {"Cookie": cookie})[0], 403)
+        with patch("pilot_engine.access.current_principal", side_effect=PermissionError("token failed")):
+            self.assertEqual(request("do_GET", "/", {"Cookie": cookie})[0], 403)
         path = "/case?id=" + self.handoff_id
         status, page = request("do_GET", path, {"Cookie": cookie})
         self.assertEqual(status, 200)

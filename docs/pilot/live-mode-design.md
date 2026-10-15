@@ -2,6 +2,11 @@
 
 Status: design only. The application still refuses live data and real external actions.
 
+Native SID identity, local process/session binding, an explicit split-role policy
+and read-only ACL preflight are implemented in the [Windows security groundwork](windows-security.md).
+These do not provide live resource I/O or browser-user authentication; #65 remains
+open for those boundaries and the target-workstation trial.
+
 ## Pilot workstation decision
 
 Target a Windows workstation with a local visual operator app. The operator already
