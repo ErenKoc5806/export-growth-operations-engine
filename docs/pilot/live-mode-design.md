@@ -2,27 +2,28 @@
 
 Status: design only. The application still refuses live data and real external actions.
 
-Native SID identity, local process/session binding, an explicit split-role policy
-and read-only ACL preflight are implemented in the [Windows security groundwork](windows-security.md).
-These do not provide live resource I/O or browser-user authentication; #65 remains
-open for those boundaries and the target-workstation trial.
+Native SID identity, local process/session binding, ACL preflight and private-file
+I/O are implemented in the [Windows groundwork](windows-security.md). Further
+hardening/service isolation is deferred under the [first-pilot trust model](trust-model.md).
+#65 closes for that baseline; #13/#68 still require manufacturer/IT acceptance and
+actual target-machine evidence. Implement #66 and #67 next.
 
 ## Pilot workstation decision
 
 Target a Windows workstation with a local visual operator app. The operator already
 completed the synthetic walkthrough in PowerShell on Windows, and a WSL setup is not
-an acceptable operator journey. Do not remove `AppConfig`'s Windows pilot refusal
-until a Windows security adapter is implemented and exercised on the actual pilot
-machine. The Unix owner/mode check and `getpass.getuser()` fallback are not adequate
-live Windows authentication. Use the process token's account SID for the actor and
-validate the owner and DACL of the database directory, database, backups, uploads
-and secrets. The local web session must be tied to that trusted actor; a shared
-Windows account cannot enforce separate operator and approver roles. Confirm the
-manufacturer's workstation/IT policy before choosing account provisioning.
+an acceptable operator journey. Keep `AppConfig`'s Windows pilot refusal until
+#66/#67 implementation and #68's target-machine rehearsal satisfy the activation
+procedure. Use the process SID as the recording OS actor, ordinary private-file
+controls and one named human approver's recorded confirmation. This does not
+authenticate the browser user or isolate the database owner. Manufacturer/IT must
+accept that limit in #13; separate OS accounts and a service are not first-pilot
+prerequisites. Do not infer approval from an actor label.
 
 The app remains loopback-only during the first controlled pilot. Remote access,
-shared accounts and browser access from another computer require a separate
-authenticated transport design. No installer or real-data path exists yet.
+untrusted users or another manufacturer require a separate authenticated service
+design. The local account arrangement is subject to manufacturer/IT approval.
+No installer or real-data path exists yet.
 
 ## Synthetic-only inventory
 
@@ -32,7 +33,7 @@ authenticated transport design. No installer or real-data path exists yet.
 | Find | `find_handoff.py` requires synthetic origin and `example.*` candidate domain; `manual_contact.py` and `sell_drafts.py` require synthetic handoff. | Authorized manufacturer profile, lawful contact source/terms, retention and reviewed buyer/route evidence before handoff. |
 | Sell | `inbound.py` requires `SYN-` references; `rfq.py`, `quotations.py` and `sell_delivery.py` require synthetic states, price origin and exact `example.*` recipients. | Separate live intake and provider adapter. #38 owns exact-content approval, named independent approver, provider idempotency, bounce/suppression and uncertain outcomes. |
 | Execute | `execute_order.py`, `execute_operations.py`, `execute_documents.py` and `shipments.py` require `SYN-` evidence and synthetic states. | Authorized real PO, price/tax authority and reviewed source documents. ERP, carrier and legal invoice actions remain separate explicit gates. |
-| UI/config | `operator_web.py` is synthetic-only; `config.py` refuses Windows pilot and checks Unix file ownership elsewhere. | Windows SID/ACL enforcement, separate named roles and pilot-specific screens. No live operation from the synthetic demo route. |
+| UI/config | `operator_web.py` is synthetic-only; `config.py` refuses Windows pilot and checks Unix file ownership elsewhere. | Private local storage, named operator/approver with recorded human confirmation, and live provenance screens under the accepted trust model. No live operation from the synthetic demo route. |
 
 The inventory should be re-run against all `SYNTHETIC`, `SYN-` and `example.*`
 checks before each live adapter is built; no global replacement or environment
@@ -70,11 +71,10 @@ procedure on a separate path before any live data is entered.
 
 ## Still required to implement
 
-- Windows token-SID actor, ACL checks and role separation; tests on the target
-  Windows filesystem and backup/restore path.
+- Actual target-Windows/filesystem/backup trial and manufacturer/IT review (#68/#13).
 - Versioned live schema migration and its rehearsal/rollback tests.
 - Dedicated real source intake and controlled mail/provider boundary (#38).
-- UI for live provenance and decisions; no synthetic demo defaults or example
+- UI for live provenance and recorded human confirmation; no synthetic demo defaults or example
   capture labeled as delivery.
 - Manufacturer authorization, source terms, approvers and measurement baseline
   from #13. The current code does not satisfy these gates.

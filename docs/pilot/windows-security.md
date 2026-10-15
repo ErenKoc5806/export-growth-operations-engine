@@ -1,5 +1,11 @@
 # Windows security groundwork (#65)
 
+Scope decision, 2026-10-15: stop additional Windows hardening at PRs #69/#70.
+#65 closes for this baseline plus the [documented first-pilot limit](trust-model.md).
+Service isolation and a custom SQLite I/O boundary are deferred. Target-machine
+evidence and manufacturer/IT acceptance remain open in #68/#13; CI is not proof
+that the intended workstation is ready.
+
 This implements native identity, security preflight and **handle-checked private
 file I/O**, not a live pilot launcher. Windows pilot mode, real records and
 external sends remain gated. Do not use the synthetic
@@ -50,12 +56,11 @@ The probe never changes an ACL, reads file contents or creates a credential.
 
 **A successful probe is only a snapshot.** Ancestor permissions are not an
 effective-access proof, and closing the inspected handle permits subsequent
-replacement/ACL changes. The standalone probe is not a live I/O gate. Database runtime work must
-keep resource creation/opening and permissions safe against replacement and
-recheck the actual handles used for I/O. A data owner or host administrator can
-still bypass application roles by editing SQLite. Real separate-account approval
-requires an authenticated service that owns the data; handing both accounts a
-writable database is not isolation.
+replacement/ACL changes. The standalone probe is not a live I/O gate. A data owner
+or host administrator can bypass application roles by editing SQLite. Real
+separate-account isolation would require a service that owns the data; that is
+deferred, not claimed by this pilot. #66 owns practical private backup/restore
+controls, and #67 records human review under the accepted trust model.
 
 ## Runtime private files and secrets
 
@@ -86,8 +91,8 @@ still rejects EGO_SECRET_DIR; future service code can use SecretStore directly.
 This protects these content operations against concurrent path replacement and
 data writes under Windows sharing semantics. The owner, SYSTEM and local
 administrators remain trusted: they can change ACLs, bypass the application or
-read process memory. This is not a SQLite VFS: runtime DB/WAL/SHM ownership,
-consistent backups and authenticated service ownership remain open.
+read process memory. This is not a SQLite VFS. Consistent backups remain in #66;
+service-owned storage and stronger isolation are outside the first-pilot scope.
 
 ## Validation and remaining acceptance
 
@@ -103,11 +108,11 @@ Windows SecretStore: replacement/write attempts between ACL check and read,
 directory rename while pinned, no-overwrite creation with explicit ownership,
 permission rechecks, rotation, malformed/oversized secrets and handle cleanup.
 
-Before closing #65, record a trial on the intended Windows workstation and its
-filesystem/IT policy, an independently verified operator/approver roster (#13),
-and the service/session and race-safe resource I/O implementation. #66 owns the
-versioned live schema and pre-migration restore rehearsal; this fixture backup is
-not that rehearsal. #67/#68 and #38 still gate real data and external actions.
+#65 closes for the baseline and documented limit, without certifying a real
+Windows installation. #68 must record the intended workstation/filesystem trial
+and IT review; #13 must record named people and manufacturer authorization.
+#66 owns versioned live schema and pre-migration restore rehearsal; the CI fixture
+backup is not that rehearsal. #67/#68 and #38 still gate real use.
 
 References: [TokenUser](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation),
 [handle security descriptors](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo),
