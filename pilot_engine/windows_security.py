@@ -205,12 +205,16 @@ class _WinAPI:
                                          0x02200000, None)
         if handle == ctypes.c_void_p(-1).value:
             self.require(False)
+        try:
+            return self.handle_security(handle)
+        finally:
+            self.kernel.CloseHandle(handle)
+
+    def handle_security(self, handle) -> FileSecurity:
+        """Inspect the exact caller-held file/directory handle, without reopening."""
         descriptor, owner, dacl = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
         try:
-            info = _FileInfo()
-            self.require(self.kernel.GetFileInformationByHandle(handle, ctypes.byref(info)))
-            if info.attributes & 0x400:
-                raise PermissionError("Reparse points are not permitted in pilot paths")
+            info = self.handle_info(handle)
             result = self.advapi.GetSecurityInfo(handle, 1, 5, ctypes.byref(owner), None,
                                                 ctypes.byref(dacl), None,
                                                 ctypes.byref(descriptor))
@@ -234,7 +238,13 @@ class _WinAPI:
         finally:
             if descriptor.value:
                 self.kernel.LocalFree(descriptor)
-            self.kernel.CloseHandle(handle)
+
+    def handle_info(self, handle) -> _FileInfo:
+        info = _FileInfo()
+        self.require(self.kernel.GetFileInformationByHandle(handle, ctypes.byref(info)))
+        if info.attributes & 0x400:
+            raise PermissionError("Reparse points are not permitted in pilot paths")
+        return info
 
 
 def current_process_sid() -> str:
