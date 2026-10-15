@@ -94,6 +94,9 @@ class NativeWindowsSecurityTests(unittest.TestCase):
         self.root.mkdir()
         self.sid = current_process_sid()
         self.trustees = frozenset({self.sid})
+        # Elevated Windows runners can assign new objects to Administrators.
+        # Provision the explicit owner our production policy requires.
+        self.icacls(self.root, "/setowner", "*" + self.sid)
         self.icacls(self.root, "/inheritance:r", "/grant:r", "*" + self.sid + ":(OI)(CI)F")
 
     def icacls(self, path, *args):
@@ -128,6 +131,7 @@ class NativeWindowsSecurityTests(unittest.TestCase):
         upload.write_text("invented", encoding="utf-8")
         secret.write_text("not-a-credential", encoding="utf-8")
         for path in (database, backup, restored, upload, secret):
+            self.icacls(path, "/setowner", "*" + self.sid)
             self.inspect(path)
         with closing(sqlite3.connect(restored)) as db:
             self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
@@ -145,16 +149,18 @@ class NativeWindowsSecurityTests(unittest.TestCase):
         self.icacls(self.root, "/remove:g", "*S-1-1-0")
         source = self.root / "file.txt"
         source.write_text("invented", encoding="utf-8")
+        self.icacls(source, "/setowner", "*" + self.sid)
+        self.inspect(source)
         linked = self.root / "linked.txt"
         os.link(source, linked)
-        with self.assertRaises(PermissionError):
+        with self.assertRaisesRegex(PermissionError, "hard links"):
             self.inspect(source)
         linked.unlink()
         junction = Path(self.temp.name) / "alias"
         subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(junction), str(self.root)],
                        check=True, capture_output=True)
         try:
-            with self.assertRaises(PermissionError):
+            with self.assertRaisesRegex(PermissionError, "reparse"):
                 self.inspect(junction / "file.txt")
         finally:
             junction.rmdir()
