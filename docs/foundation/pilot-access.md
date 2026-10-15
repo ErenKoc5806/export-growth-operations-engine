@@ -1,5 +1,10 @@
 # FND-006 — Single-operator pilot access
 
+The current first-pilot decision is the [one-workstation trust model](../pilot/trust-model.md):
+one manufacturer, named operator and human approver with recorded confirmation.
+The owner/admin bypass limit is explicit. The historical POSIX foundation below
+does not require building cross-account service isolation before that pilot.
+
 Windows development now derives the actor from the process token SID, with no
 username fallback. See [Windows groundwork](../pilot/windows-security.md) for
 the separate opt-in role policy and ACL preflight. The POSIX deployment below is
@@ -30,4 +35,9 @@ The actor recorded on an approval, synthetic ingestion audit event, and opportun
 
 ## Future isolation
 
-Before a second user or manufacturer is admitted, introduce an authenticated service/session boundary, server-side role policy, tenant ID on all canonical records and queries, per-tenant source and document access, and tests for cross-tenant denial. SQLite file permission does not isolate tenants within a shared process. At that point reassess storage and deployment topology.
+Before untrusted users, remote access or another manufacturer are admitted,
+introduce an authenticated service/session boundary, server-side role policy,
+tenant identity and cross-tenant tests. A second trusted human reviewer on the
+first workstation can instead use the recorded confirmation procedure accepted
+by manufacturer/IT. SQLite file permission does not isolate tenants or prevent
+the data owner bypassing roles; do not advertise that protection.
