@@ -124,8 +124,23 @@ class OperatorWeb:
             raise ValueError("Görsel arayüz yalnızca sentetik modda çalışır; canlı mod #42'de")
         self.config = config
         self.store = config.open_store()
+        self.session_actor, allowed = self.store.access.decision("READ_SUMMARY")
+        if not allowed:
+            raise PermissionError("Operator session requires READ_SUMMARY")
         self.session = secrets.token_urlsafe(32)
         self.csrf = secrets.token_urlsafe(32)
+
+    def session_matches_actor(self) -> bool:
+        """Bind the local bearer session to its launching OS principal.
+
+        This is not browser-user authentication or cross-account role switching.
+        Live mode remains disabled until it has a separate authenticated boundary.
+        """
+        try:
+            actor, allowed = self.store.access.decision("READ_SUMMARY")
+            return allowed and actor == self.session_actor
+        except (OSError, RuntimeError):
+            return False
 
     def handoffs(self) -> list[dict]:
         with closing(self.store._connect()) as db:
@@ -850,7 +865,7 @@ def make_handler(app: OperatorWeb):
 
         def _authorized(self) -> bool:
             cookies = [part.strip() for part in self.headers.get("Cookie", "").split(";")]
-            return self._session_cookie() in cookies
+            return app.session_matches_actor() and self._session_cookie() in cookies
 
         def _case_id(self) -> str:
             parsed = urlsplit(self.path)
@@ -870,7 +885,7 @@ def make_handler(app: OperatorWeb):
         def do_GET(self) -> None:
             parsed = urlsplit(self.path)
             token = parse_qs(parsed.query).get("token", [])
-            if parsed.path == "/" and token == [app.session]:
+            if parsed.path == "/" and token == [app.session] and app.session_matches_actor():
                 self._send(HTTPStatus.SEE_OTHER, b"", cookie=True, location="/")
                 return
             if not self._authorized():
