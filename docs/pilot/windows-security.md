@@ -1,8 +1,8 @@
 # Windows security groundwork (#65)
 
-This implements native identity and **read-only security preflight**, not a live
-pilot launcher. Windows pilot mode, real records, credentials, external sends and
-the existing POSIX database/secret checks remain gated. Do not use the synthetic
+This implements native identity, security preflight and **handle-checked private
+file I/O**, not a live pilot launcher. Windows pilot mode, real records and
+external sends remain gated. Do not use the synthetic
 Windows storage exception for real data.
 
 ## Identity and sessions
@@ -50,12 +50,44 @@ The probe never changes an ACL, reads file contents or creates a credential.
 
 **A successful probe is only a snapshot.** Ancestor permissions are not an
 effective-access proof, and closing the inspected handle permits subsequent
-replacement/ACL changes. The probe is not wired into live I/O. Runtime work must
+replacement/ACL changes. The standalone probe is not a live I/O gate. Database runtime work must
 keep resource creation/opening and permissions safe against replacement and
 recheck the actual handles used for I/O. A data owner or host administrator can
 still bypass application roles by editing SQLite. Real separate-account approval
 requires an authenticated service that owns the data; handing both accounts a
 writable database is not isolation.
+
+## Runtime private files and secrets
+
+`WindowsPrivateFiles` adds bounded reads and create-only artifact writes in an
+existing IT-provisioned private directory. Each operation derives the owner SID
+from the process token again, opens and holds every directory component without
+delete sharing, rejects reparse points, and validates the private root's owner
+and DACL. The leaf is opened without data sharing; its owner/DACL, disk type and
+hard-link count are checked on that handle. ReadFile/WriteFile use the same handle
+while the directory chain remains pinned. No checked path or cached preflight
+result is reopened for content I/O. Device names, alternate streams and traversal
+are rejected before opening the leaf.
+
+New artifacts use CREATE_NEW with an explicit owner and protected DACL from the
+first instant of creation; inherited broad permissions and elevated-account
+default ownership are not used. Existing names are never truncated or replaced.
+Writes are flushed; only a successful return can be treated as persisted evidence.
+A failed write may leave an incomplete private file requiring reconciliation;
+this is not an atomic publication or application-level idempotency protocol.
+
+`SecretStore` uses this reader natively on Windows with the same name, size,
+single-line UTF-8 validation and SecretValue redaction as POSIX. Secrets must
+remain outside the source tree. Every get reopens and rechecks permissions;
+owner-controlled replacement between requests rotates the value. No credential
+is provisioned and no provider is called. The synthetic Windows AppConfig path
+still rejects EGO_SECRET_DIR; future service code can use SecretStore directly.
+
+This protects these content operations against concurrent path replacement and
+data writes under Windows sharing semantics. The owner, SYSTEM and local
+administrators remain trusted: they can change ACLs, bypass the application or
+read process memory. This is not a SQLite VFS: runtime DB/WAL/SHM ownership,
+consistent backups and authenticated service ownership remain open.
 
 ## Validation and remaining acceptance
 
@@ -65,6 +97,11 @@ backup/restore with an integrity check; invented upload/secret resources; broad
 file/directory grants; hard links and directory junctions. Portable tests cover
 unknown/unsupported ACLs and role separation; HTTP tests cover actor changes and
 failed identity resolution. CI uses invented data and no real credentials.
+
+`test_windows_files.py` exercises actual handle-checked reads/writes and the
+Windows SecretStore: replacement/write attempts between ACL check and read,
+directory rename while pinned, no-overwrite creation with explicit ownership,
+permission rechecks, rotation, malformed/oversized secrets and handle cleanup.
 
 Before closing #65, record a trial on the intended Windows workstation and its
 filesystem/IT policy, an independently verified operator/approver roster (#13),
