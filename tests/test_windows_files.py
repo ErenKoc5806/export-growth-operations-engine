@@ -108,6 +108,24 @@ class NativeWindowsFileTests(unittest.TestCase):
         self.root.rename(moved)
         moved.rename(self.root)
 
+    def test_checked_new_file_stays_locked_until_content_is_written(self):
+        self.files.write_new("REPLACEMENT", b"different file")
+        original = _FileAPI.handle_security
+        attacks = []
+
+        def check_then_attack(api, handle):
+            security = original(api, handle)
+            if not security.is_directory:
+                with self.assertRaises(PermissionError):
+                    os.replace(self.root / "REPLACEMENT", self.root / "UPLOAD")
+                attacks.append(True)
+            return security
+
+        with patch.object(_FileAPI, "handle_security", check_then_attack):
+            self.files.write_new("UPLOAD", b"invented upload bytes")
+        self.assertEqual(attacks, [True])
+        self.assertEqual(self.files.read_bytes("UPLOAD", max_bytes=100), b"invented upload bytes")
+
     def test_rechecks_directory_and_leaf_permissions_on_every_read(self):
         self.files.write_new("TOKEN", b"invented")
         source = SecretStore(self.root)
