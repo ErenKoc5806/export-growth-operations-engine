@@ -2,7 +2,8 @@
 
 Implemented maintenance tooling; **full live operation remains disabled**.
 The separate [authorized intake workspace](authorized-intake.md) requires #13
-evidence and extension v2. Manufacturer acceptance and actual workstation
+evidence, extension v3 and an external current [retention ledger](evidence-retention.md).
+Manufacturer acceptance and actual workstation
 activation (#68) remain outstanding. Use the [trusted-owner pilot model](trust-model.md).
 
 ## Two schema versions, one database
@@ -10,8 +11,9 @@ activation (#68) remain outstanding. Use the [trusted-owner pilot model](trust-m
 The existing 29 migrations and `PRAGMA user_version = 29` remain unchanged.
 `live_migrations/001_namespace.sql` is an independently versioned, additive
 extension. Its first release was v1; `002_intake_evidence.sql` adds v2 evidence,
-authorization, source permission and stop records. Its latest receipt is
-`live_schema_migration.version = 2`. The normal
+authorization, source permission and stop records. `003_retention.sql` adds
+control binding and minimal purge receipts. Its latest receipt is
+`live_schema_migration.version = 3`. The normal
 `PilotStore` startup does not install it. Keeping the old CHECK constraints avoids
 rebuilding synthetic tables or allowing existing synthetic services to consume
 live rows. Never relabel or copy a synthetic record into the live namespace.
@@ -58,7 +60,7 @@ listed in [the boundary inventory](live-mode-design.md).
    legacy table's rows, schema objects, counts, application ID and version.
 4. Before any live DDL, the tool restores that backup into a separate new SQLite
    file and verifies the same complete legacy fingerprint/counts and integrity.
-   Existing live history is included when upgrading v1 to v2. It verifies the
+   Existing live history is included when upgrading v1/v2 to v3. It verifies the
    backup SHA-256 again, then writes a private
    `<backup>.manifest.json` receipt. The receipt contains counts/hashes, not row
    payloads. Keep it with the backup under the approved retention policy. SQLite
@@ -89,7 +91,11 @@ recovery can stop all users, preserve the failed database and all sidecars, veri
 the backup checksum against the receipt, and promote the separately verified
 restored copy under the approved private permissions. Do not mix old WAL/SHM files
 with the replacement. Open and validate that copy before resuming. It contains
-the old synthetic v29 state; rerun maintenance with new artifacts if needed.
+the recorded pre-migration state; rerun maintenance with new artifacts if needed.
+After retirement/purge, check any restored copy against the **current external**
+retention ledger before promotion. A copy containing retired content is rejected.
+Subsequent live backups use the registered-copy workflow in
+[evidence-retention.md](evidence-retention.md), with explicit owner/expiry/disposition.
 
 After any live event or external attempt, preserve history and reconcile external
 outcomes before a reviewed forward correction. Never silently restore an older

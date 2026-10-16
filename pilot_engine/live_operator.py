@@ -28,7 +28,9 @@ def _proof(name, label):
     return _field(name, label + " (en çok 5 MB)", kind="file")
 
 
-def _document(identity, label):
+def _document(identity, label, *, purged=False):
+    if purged:
+        return _h(label) + " — silinmiş, kullanılamaz"
     return "<a href='/document?id=" + _h(identity) + "'>" + _h(label) + " — dosyayı indir</a>"
 
 
@@ -41,8 +43,8 @@ def _status(value):
 class LiveOperator:
     intake_only = True
 
-    def __init__(self, database, access=None):
-        self.intake = LiveIntake(database, access)
+    def __init__(self, database, access=None, *, retention_ledger=None):
+        self.intake = LiveIntake(database, access, retention_ledger=retention_ledger)
         self.session = secrets.token_urlsafe(32)
         self.csrf = secrets.token_urlsafe(32)
 
@@ -121,6 +123,9 @@ class LiveOperator:
             source = db.execute("SELECT * FROM live_source_permission WHERE source_id=?", (row["source_id"],)).fetchone()
             for doc_id, label in ((source["document_id"], "Özgün kaynak"),
                                   (source["permission_document_id"], "Kullanım izni kanıtı")):
+                if self.intake.document_purged(db, doc_id):
+                    body += "<p>" + _document(doc_id, label, purged=True) + "</p>"
+                    continue
                 doc = self.intake.read_document(db, doc_id)
                 body += "<p>" + _document(doc_id, label) + " · SHA-256: " + _h(doc["sha256"]) + "</p>"
         body += "<h3>İnsan onayı</h3><p>Onaylayan: " + _h(pilot["approver_name"]) + " · " + _h(pilot["approver_role"])
@@ -148,7 +153,8 @@ class LiveOperator:
             for key in ("approver_name", "approver_role", "authority_ref", "reason", "method", "evidence_ref",
                         "confirmed_at_utc", "recorded_by_actor", "recorded_at_utc", "identity_basis"):
                 body += "<p>" + _h(labels[key]) + ": " + _h(item[key]) + "</p>"
-            body += _document(item["document_id"], "Teyit kanıtı") + "</div>"
+            body += _document(item["document_id"], "Teyit kanıtı",
+                              purged=item["document_id"] in data["purged_document_ids"]) + "</div>"
         return body
 
     def page(self, path, query):
@@ -174,7 +180,9 @@ class LiveOperator:
             body += "<p>Yetki: " + _h(pilot["authorization_ref"]) + " · Geçerlilik: " + _h(pilot["expires_at_utc"]) + "</p>"
             with self.intake.transaction(write=False) as db:
                 auth = db.execute("SELECT * FROM live_authorization WHERE pilot_id=?", (pilot["id"],)).fetchone()
-                body += _document(auth["manufacturer_document_id"], "Üretici kabulü") + " · " + _document(auth["it_document_id"], "IT kabulü")
+                body += _document(auth["manufacturer_document_id"], "Üretici kabulü",
+                    purged=auth["manufacturer_document_id"] in data["purged_document_ids"]) + " · " + _document(
+                    auth["it_document_id"], "IT kabulü", purged=auth["it_document_id"] in data["purged_document_ids"])
             for kind, label in KINDS.items():
                 body += "<p><a href='/new?kind=" + kind + "'>Yeni " + _h(label) + "</a></p>"
             for item in data["items"]:
@@ -230,8 +238,9 @@ class LiveOperator:
 def main():
     parser = argparse.ArgumentParser(description="Yerel yetkili kaynak kabulü; dış işlemler kapalı")
     parser.add_argument("--database", required=True)
+    parser.add_argument("--retention-ledger", required=True)
     args = parser.parse_args()
-    app = LiveOperator(args.database)
+    app = LiveOperator(args.database, retention_ledger=args.retention_ledger)
     with ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app)) as server:
         server.daemon_threads = True
         url = f"http://127.0.0.1:{server.server_port}/?token={app.session}"

@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pilot_engine.access import LocalAccess
 from pilot_engine.live_migration import _connect, _live_version, _private
+from pilot_engine.live_retention import Retention
 
 
 FIELDS = {
@@ -90,13 +91,16 @@ def _amount(value):
 
 
 class LiveIntake:
-    def __init__(self, database, access=None):
+    def __init__(self, database, access=None, *, retention_ledger=None):
         self.path = Path(database).absolute()
         self.access = access if access is not None else LocalAccess.single_operator()
         self.actor = self.require("READ_LIVE_INTAKE")
+        if retention_ledger is None:
+            raise ValueError("Ayrı ve güncel saklama/silme günlüğü gerekli")
+        self.retention = Retention(self.path, retention_ledger, self.access)
         with self.transaction(write=False) as db:
-            if _live_version(db) != 2:
-                raise ValueError("Önce yedekli canlı şema v2 bakımını çalıştırın")
+            if _live_version(db) != 3:
+                raise ValueError("Önce yedekli canlı şema v3 bakımını çalıştırın")
 
     def require(self, permission):
         actor, allowed = self.access.decision(permission)
@@ -113,11 +117,13 @@ class LiveIntake:
             sidecar = Path(str(self.path) + suffix)
             if sidecar.exists() or sidecar.is_symlink():
                 _private(sidecar)
-        with closing(_connect(self.path)) as db:
+        with self.retention.ledger() as ledger, closing(_connect(self.path)) as db:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             try:
+                self.retention.guard(db, ledger)
                 yield db
+                self.retention.guard(db, ledger)
                 db.commit()
             except BaseException:
                 db.rollback()
@@ -129,6 +135,7 @@ class LiveIntake:
         digest = _hash(content)
         row = db.execute("SELECT id FROM live_document WHERE sha256=?", (digest,)).fetchone()
         if row:
+            self.read_document(db, row[0])
             return row[0]
         identity = "LIVE-DOC-" + uuid4().hex
         db.execute("INSERT INTO live_document VALUES (?,?,?,?,?)",
@@ -286,10 +293,16 @@ class LiveIntake:
             raise ValueError("Kaynak izni geri çekilmiş")
 
     def read_document(self, db, document_id):
+        if self.document_purged(db, document_id):
+            raise ValueError("Kanıt belgesi silinmiş; tekrar kullanılamaz")
         row = db.execute("SELECT * FROM live_document WHERE id=?", (document_id,)).fetchone()
         if not row or _hash(row["content"]) != row["sha256"]:
             raise ValueError("Kanıt dosyası doğrulanamadı")
         return row
+
+    def document_purged(self, db, document_id):
+        return db.execute("SELECT 1 FROM live_document_purge WHERE document_id=?",
+                          (document_id,)).fetchone() is not None
 
     def confirm(self, intake_id, revision, digest, expected_sequence, values, evidence):
         self.require("RECORD_LIVE_CONFIRMATION")
@@ -349,6 +362,7 @@ class LiveIntake:
             rows = [dict(row) for row in db.execute("SELECT i.id, i.kind, max(r.revision) revision "
                 "FROM live_intake i JOIN live_intake_revision r ON r.intake_id=i.id GROUP BY i.id ORDER BY i.rowid DESC")]
             result = {"pilot": pilot, "blocked": blocked, "items": rows}
+            result["purged_document_ids"] = {row[0] for row in db.execute("SELECT document_id FROM live_document_purge")}
             if intake_id:
                 row = self.current(db, intake_id)
                 history = [dict(item) for item in db.execute("SELECT c.*, e.document_id, e.approver_role "

@@ -27,8 +27,9 @@ BASE_TABLES = frozenset({"live_schema_migration", "live_pilot", "live_source",
                          "live_intake", "live_intake_revision", "live_confirmation"})
 EVIDENCE_TABLES = frozenset({"live_document", "live_authorization", "live_source_permission",
                             "live_confirmation_evidence", "live_intake_stop"})
-LIVE_TABLES = BASE_TABLES | EVIDENCE_TABLES
-LIVE_VERSION = 2
+RETENTION_TABLES = frozenset({"live_retention_binding", "live_document_purge"})
+LIVE_TABLES = BASE_TABLES | EVIDENCE_TABLES | RETENTION_TABLES
+LIVE_VERSION = 3
 
 
 def _quote(name: str) -> str:
@@ -147,9 +148,10 @@ def _live_version(db: sqlite3.Connection) -> int:
     if "live_schema_migration" not in live_tables:
         raise ValueError("Incomplete or unknown live namespace")
     version = db.execute("SELECT max(version) FROM live_schema_migration").fetchone()[0]
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise ValueError("Unsupported live schema version")
-    version_tables = BASE_TABLES if version == 1 else LIVE_TABLES
+    version_tables = (BASE_TABLES if version == 1 else BASE_TABLES | EVIDENCE_TABLES
+                      if version == 2 else LIVE_TABLES)
     if live_tables != version_tables:
         raise ValueError("Incomplete or unknown live namespace")
     expected = {name + suffix for name in version_tables for suffix in ("_no_update", "_no_delete")}
@@ -160,11 +162,18 @@ def _live_version(db: sqlite3.Connection) -> int:
 
 
 def _apply(db: sqlite3.Connection, current: int = 0) -> None:
-    scripts = ([SCHEMA] if current == 0 else []) + [SCHEMA.with_name("002_intake_evidence.sql")]
+    scripts = ([SCHEMA] if current == 0 else [])
+    if current < 2:
+        scripts.append(SCHEMA.with_name("002_intake_evidence.sql"))
+    scripts.append(SCHEMA.with_name("003_retention.sql"))
     for script in scripts:
         for statement in _migration_statements(script.read_text(encoding="utf-8")):
             db.execute(statement)
-    for table in sorted(LIVE_TABLES if current == 0 else EVIDENCE_TABLES):
+    new_tables = (BASE_TABLES if current == 0 else frozenset())
+    if current < 2:
+        new_tables |= EVIDENCE_TABLES
+    new_tables |= RETENTION_TABLES
+    for table in sorted(new_tables):
         for action in ("UPDATE", "DELETE"):
             db.execute(f"CREATE TRIGGER {_quote(table + '_no_' + action.lower())} "
                        f"BEFORE {action} ON {_quote(table)} BEGIN "
