@@ -78,6 +78,8 @@ def _future(value):
 def private_database(path):
     path = Path(path).absolute()
     _private(path.parent, directory=True)
+    if not path.exists() and not path.is_symlink():
+        raise FileNotFoundError("Private database/control file is missing")
     _private(path)
     for suffix in ("-wal", "-shm", "-journal"):
         sidecar = Path(str(path) + suffix)
