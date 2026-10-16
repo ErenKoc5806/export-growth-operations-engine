@@ -402,7 +402,10 @@ class Retention:
                              "FROM live_document d LEFT JOIN live_document_purge p ON p.document_id=d.id ORDER BY d.id")]
             return {"operations": [dict(row) for row in ledger.execute(
                         "SELECT id,kind,target,state,started_at FROM operation ORDER BY started_at")],
-                    "copies": [{**dict(row), "expired": datetime.fromisoformat(row["expires_at"]) <= _now()}
+                    "copies": [{**dict(row), "expired": datetime.fromisoformat(row["expires_at"]) <= _now(),
+                                "present": Path(row["path"]).exists() or Path(row["path"]).is_symlink(),
+                                "reappeared_after_disposal": row["state"] == "DISPOSED" and
+                                (Path(row["path"]).exists() or Path(row["path"]).is_symlink())}
                                for row in ledger.execute("SELECT * FROM recovery_copy ORDER BY id")],
                     "policy": dict(ledger.execute("SELECT * FROM policy ORDER BY sequence DESC LIMIT 1").fetchone()),
                     "documents": documents, "pilots": [row[0] for row in db.execute("SELECT id FROM live_pilot")],
@@ -469,11 +472,13 @@ class Retention:
             row = ledger.execute("SELECT * FROM recovery_copy WHERE id=?", (copy_id,)).fetchone()
             if not row:
                 raise ValueError("Unknown registered copy")
+            path = Path(row["path"])
             if row["state"] == "DISPOSED":
+                if path.exists() or path.is_symlink():
+                    raise ValueError("Disposed copy path reappeared; quarantine and review it")
                 return {"status": "DISPOSED"}
             if row["sha256"] and row["sha256"] != expected_sha256:
                 raise ValueError("Copy hash changed; do not delete it")
-            path = Path(row["path"])
             if path.is_relative_to(self.database.parent) or path.is_relative_to(self.path.parent):
                 raise ValueError("Never dispose data/control files")
             if path.exists() or path.is_symlink():

@@ -197,6 +197,11 @@ class LiveRetentionTests(unittest.TestCase):
         self.assertEqual(self.retention.dispose_copy(identity, checksum, "FIXTURE-DISPOSITION",
                                                     reviewed=True)["status"], "DISPOSED")
         self.assertEqual({row["state"] for row in self.retention.inventory()["copies"]}, {"DISPOSED", "ACTIVE"})
+        migration._new_file(self.backup_copy, b"unexpected reappeared copy")
+        with self.assertRaisesRegex(ValueError, "reappeared"):
+            self.retention.dispose_copy(identity, checksum, "FIXTURE-DISPOSITION", reviewed=True)
+        self.assertTrue(any(row["reappeared_after_disposal"] for row in self.retention.inventory()["copies"]))
+        self.assertEqual(self.backup_copy.read_bytes(), b"unexpected reappeared copy")
 
     def test_failed_backup_retains_registered_partial_copy_for_inspection(self):
         original = migration._copy_database
