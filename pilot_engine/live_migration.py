@@ -1,4 +1,4 @@
-"""Explicit v29 -> live-extension-v1 maintenance, with a verified restore first.
+"""Explicit live-extension maintenance, with a verified whole-database restore first.
 
 Run with the operator app stopped. A SQLite reserved writer lock prevents new
 writes during backup/rehearsal/migration. No live intake or side effect is enabled.
@@ -23,8 +23,12 @@ from pilot_engine.store import _migration_statements
 
 
 SCHEMA = Path(__file__).parent / "live_migrations" / "001_namespace.sql"
-LIVE_TABLES = frozenset({"live_schema_migration", "live_pilot", "live_source",
+BASE_TABLES = frozenset({"live_schema_migration", "live_pilot", "live_source",
                          "live_intake", "live_intake_revision", "live_confirmation"})
+EVIDENCE_TABLES = frozenset({"live_document", "live_authorization", "live_source_permission",
+                            "live_confirmation_evidence", "live_intake_stop"})
+LIVE_TABLES = BASE_TABLES | EVIDENCE_TABLES
+LIVE_VERSION = 2
 
 
 def _quote(name: str) -> str:
@@ -45,11 +49,14 @@ def _check(db: sqlite3.Connection) -> None:
         raise sqlite3.IntegrityError("Database foreign key check failed")
 
 
-def _snapshot(db: sqlite3.Connection) -> dict:
-    """Hash every legacy row and schema object; never expose row payloads."""
+def _snapshot(db: sqlite3.Connection, *, include_live=False, tables=None,
+              migration_version=None) -> dict:
+    """Hash rows/schema without exposing payloads; optionally include live history."""
     objects = db.execute("SELECT type, name, tbl_name, sql FROM sqlite_master "
-                         "WHERE name NOT GLOB 'live_*' AND tbl_name NOT GLOB 'live_*' "
                          "ORDER BY type, name").fetchall()
+    objects = [row for row in objects if
+               (include_live or not row[2].startswith("live_")) and
+               (tables is None or row[2] in tables)]
     digest = hashlib.sha256(json.dumps(objects, ensure_ascii=True).encode())
     counts = {}
     for kind, name, _, _ in objects:
@@ -58,7 +65,10 @@ def _snapshot(db: sqlite3.Connection) -> dict:
         rows = db.execute("SELECT * FROM " + _quote(name)).fetchall()
         # Live AUTOINCREMENT must not change the legacy sqlite_sequence digest.
         if name == "sqlite_sequence":
-            rows = [row for row in rows if not row[0].startswith("live_")]
+            rows = [row for row in rows if (include_live or not row[0].startswith("live_"))
+                    and (tables is None or row[0] in tables)]
+        if name == "live_schema_migration" and migration_version is not None:
+            rows = [row for row in rows if row[0] <= migration_version]
         encoded = sorted(json.dumps(row, default=lambda value: {"bytes_hex": value.hex()},
                                     ensure_ascii=True) for row in rows)
         counts[name] = len(rows)
@@ -134,22 +144,27 @@ def _live_version(db: sqlite3.Connection) -> int:
     live_tables = {name for name in tables if name.startswith("live_")}
     if not live_tables:
         return 0
-    if live_tables != LIVE_TABLES:
+    if "live_schema_migration" not in live_tables:
         raise ValueError("Incomplete or unknown live namespace")
     version = db.execute("SELECT max(version) FROM live_schema_migration").fetchone()[0]
-    if version != 1:
+    if version not in (1, 2):
         raise ValueError("Unsupported live schema version")
-    expected = {name + suffix for name in LIVE_TABLES for suffix in ("_no_update", "_no_delete")}
+    version_tables = BASE_TABLES if version == 1 else LIVE_TABLES
+    if live_tables != version_tables:
+        raise ValueError("Incomplete or unknown live namespace")
+    expected = {name + suffix for name in version_tables for suffix in ("_no_update", "_no_delete")}
     triggers = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     if not expected <= triggers:
         raise ValueError("Live append-only guards are missing")
     return version
 
 
-def _apply(db: sqlite3.Connection) -> None:
-    for statement in _migration_statements(SCHEMA.read_text(encoding="utf-8")):
-        db.execute(statement)
-    for table in sorted(LIVE_TABLES):
+def _apply(db: sqlite3.Connection, current: int = 0) -> None:
+    scripts = ([SCHEMA] if current == 0 else []) + [SCHEMA.with_name("002_intake_evidence.sql")]
+    for script in scripts:
+        for statement in _migration_statements(script.read_text(encoding="utf-8")):
+            db.execute(statement)
+    for table in sorted(LIVE_TABLES if current == 0 else EVIDENCE_TABLES):
         for action in ("UPDATE", "DELETE"):
             db.execute(f"CREATE TRIGGER {_quote(table + '_no_' + action.lower())} "
                        f"BEFORE {action} ON {_quote(table)} BEGIN "
@@ -192,9 +207,9 @@ def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> 
             if version != 29:
                 raise ValueError("Live extension requires the reviewed legacy schema v29")
             current = _live_version(db)
-            if current:
+            if current == LIVE_VERSION:
                 row = db.execute("SELECT backup_sha256, legacy_fingerprint "
-                                 "FROM live_schema_migration WHERE version=1").fetchone()
+                                 "FROM live_schema_migration WHERE version=?", (current,)).fetchone()
                 db.rollback()
                 return MigrationResult("ALREADY_MIGRATED", version, current, *row)
             if not {"manufacturer", "product", "audit_event", "approval_event"} <= {
@@ -202,35 +217,44 @@ def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> 
             }:
                 raise ValueError("Not the expected legacy application database")
             before = _snapshot(db)
+            full_before = _snapshot(db, include_live=True)
+            old_tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             _copy_database(database, backup)
             with closing(_connect(backup, readonly=True)) as copy:
-                if _snapshot(copy) != before:
+                if _snapshot(copy, include_live=True) != full_before:
                     raise ValueError("Backup does not reproduce the legacy database")
             checksum = _sha256(backup)
             _copy_database(backup, rehearsal)
             with closing(_connect(rehearsal, readonly=True)) as restored:
-                if _snapshot(restored) != before:
+                if _snapshot(restored, include_live=True) != full_before:
                     raise ValueError("Restore rehearsal does not reproduce the legacy database")
             if _sha256(backup) != checksum:
                 raise ValueError("Backup changed during restore rehearsal")
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            receipt = {"format_version": 1, "backup_name": backup.name,
+            receipt = {"format_version": 2, "backup_name": backup.name,
                        "backup_sha256": checksum, "restore_name": rehearsal.name,
-                       "recorded_at_utc": now, **before}
+                       "recorded_at_utc": now, "legacy_fingerprint": before["fingerprint"],
+                       "from_live_version": current, "to_live_version": LIVE_VERSION, **full_before}
             manifest = backup.with_name(backup.name + ".manifest.json")
             _new_file(manifest, json.dumps(receipt, sort_keys=True).encode("utf-8"))
-            _apply(db)
+            if current:
+                _apply(db, current)
+            else:
+                _apply(db)
             principal = current_principal()
             actor = "uid:" + str(principal) if isinstance(principal, int) else principal
             db.execute("INSERT INTO live_schema_migration "
                        "(version, backup_sha256, legacy_fingerprint, actor_id, applied_at_utc) "
-                       "VALUES (1, ?, ?, ?, ?)", (checksum, before["fingerprint"], actor, now))
+                       "VALUES (?, ?, ?, ?, ?)", (LIVE_VERSION, checksum, before["fingerprint"], actor, now))
             _check(db)
             if _snapshot(db) != before:
                 raise ValueError("Live extension changed legacy rows or schema")
+            if _snapshot(db, include_live=True, tables=old_tables,
+                         migration_version=current) != full_before:
+                raise ValueError("Live extension changed existing records or schema")
             _live_version(db)
             db.commit()
-            return MigrationResult("MIGRATED", version, 1, checksum, before["fingerprint"])
+            return MigrationResult("MIGRATED", version, LIVE_VERSION, checksum, before["fingerprint"])
         except BaseException:
             db.rollback()
             raise

@@ -1,14 +1,17 @@
 # Live schema extension and recovery rehearsal (#66)
 
-Implemented maintenance tooling; **live operation remains disabled**. This does
-not complete authorized intake (#67), manufacturer acceptance (#13) or actual
-workstation activation (#68). Use the [trusted-owner pilot model](trust-model.md).
+Implemented maintenance tooling; **full live operation remains disabled**.
+The separate [authorized intake workspace](authorized-intake.md) requires #13
+evidence and extension v2. Manufacturer acceptance and actual workstation
+activation (#68) remain outstanding. Use the [trusted-owner pilot model](trust-model.md).
 
 ## Two schema versions, one database
 
 The existing 29 migrations and `PRAGMA user_version = 29` remain unchanged.
 `live_migrations/001_namespace.sql` is an independently versioned, additive
-extension. Its receipt is `live_schema_migration.version = 1`. The normal
+extension. Its first release was v1; `002_intake_evidence.sql` adds v2 evidence,
+authorization, source permission and stop records. Its latest receipt is
+`live_schema_migration.version = 2`. The normal
 `PilotStore` startup does not install it. Keeping the old CHECK constraints avoids
 rebuilding synthetic tables or allowing existing synthetic services to consume
 live rows. Never relabel or copy a synthetic record into the live namespace.
@@ -55,13 +58,14 @@ listed in [the boundary inventory](live-mode-design.md).
    legacy table's rows, schema objects, counts, application ID and version.
 4. Before any live DDL, the tool restores that backup into a separate new SQLite
    file and verifies the same complete legacy fingerprint/counts and integrity.
-   It verifies the backup SHA-256 again, then writes a private
+   Existing live history is included when upgrading v1 to v2. It verifies the
+   backup SHA-256 again, then writes a private
    `<backup>.manifest.json` receipt. The receipt contains counts/hashes, not row
    payloads. Keep it with the backup under the approved retention policy. SQLite
    files and the JSON receipt are not encrypted by this tool.
 5. The extension and its receipt are applied in one transaction. Integrity,
-   foreign keys, version, append-only guard presence and unchanged legacy
-   fingerprint/counts are checked before commit. Output reports `MIGRATED`, the
+   foreign keys, version, append-only guards and unchanged legacy and existing
+   live records/schema are checked before commit. Output reports `MIGRATED`, the
    two schema versions and backup/fingerprint hashes. A completed retry reports
    `ALREADY_MIGRATED` without creating or replacing recovery artifacts.
 6. Record release SHA, paths, output hashes, named operator, date and the result

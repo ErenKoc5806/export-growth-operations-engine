@@ -66,7 +66,7 @@ class LiveMigrationTests(unittest.TestCase):
     def test_whole_legacy_database_backup_restore_and_idempotent_restart(self):
         result = self.run_migration()
         self.assertEqual((result.status, result.legacy_version, result.live_version),
-                         ("MIGRATED", 29, 1))
+                         ("MIGRATED", 29, 2))
         for path in (self.path, self.backup, self.rehearsal):
             self.assertEqual(self.snapshot(path), self.before)
             migration._private(path)
@@ -105,6 +105,47 @@ class LiveMigrationTests(unittest.TestCase):
         self.backup = self.recovery / "retry.sqlite3"
         self.rehearsal = self.restore / "retry.sqlite3"
         self.assertEqual(self.run_migration().status, "MIGRATED")
+
+    def test_upgrade_released_v1_preserves_live_rows_in_backup_restore_and_failure(self):
+        # Recreate the released #72 extension, including its append-only guards.
+        with closing(migration._connect(self.path)) as db, db:
+            for statement in migration._migration_statements(migration.SCHEMA.read_text()):
+                db.execute(statement)
+            for table in migration.BASE_TABLES:
+                for action in ("UPDATE", "DELETE"):
+                    db.execute(f"CREATE TRIGGER {table}_no_{action.lower()} BEFORE {action} ON {table} "
+                               "BEGIN SELECT RAISE(ABORT, 'live records are append-only'); END")
+            db.execute("INSERT INTO live_schema_migration VALUES (1,?,?,?,?)",
+                       ("a" * 64, self.before["fingerprint"], "fixture-actor", "2026-10-16"))
+            db.execute("INSERT INTO live_pilot VALUES ('LIVE-P','FICTIONAL v1 pilot','TEST-AUTH',"
+                       "'Fixture operator','Fixture approver','LIVE','fixture-actor','2026-10-16')")
+            self.assertEqual(migration._live_version(db), 1)
+            full_before = migration._snapshot(db, include_live=True)
+        original = migration._apply
+
+        def fail(db, current):
+            original(db, current)
+            raise RuntimeError("injected v1 upgrade failure")
+
+        with patch.object(migration, "_apply", fail):
+            with self.assertRaisesRegex(RuntimeError, "v1 upgrade"):
+                self.run_migration()
+        with closing(migration._connect(self.path)) as db:
+            self.assertEqual(migration._live_version(db), 1)
+            self.assertEqual(migration._snapshot(db, include_live=True), full_before)
+        for path in (self.backup, self.rehearsal):
+            with closing(migration._connect(path)) as db:
+                self.assertEqual(migration._snapshot(db, include_live=True), full_before)
+        self.backup = self.recovery / "upgrade-v2.sqlite3"
+        self.rehearsal = self.restore / "upgrade-v2.sqlite3"
+        self.assertEqual(self.run_migration().live_version, 2)
+        with closing(migration._connect(self.path)) as db:
+            self.assertEqual(migration._live_version(db), 2)
+            self.assertEqual(db.execute("SELECT manufacturer_name FROM live_pilot").fetchone()[0],
+                             "FICTIONAL v1 pilot")
+            self.assertEqual(db.execute("SELECT version FROM live_schema_migration ORDER BY version").fetchall(),
+                             [(1,), (2,)])
+        self.assertEqual(self.snapshot(self.path), self.before)
 
     def test_backup_and_restore_failure_never_apply_live_ddl(self):
         original = migration._copy_database
@@ -246,7 +287,7 @@ class LiveMigrationTests(unittest.TestCase):
                             confirmation[:-1] + ("AUTHENTICATED_APPROVER",)):
                 with self.assertRaises(sqlite3.IntegrityError):
                     db.execute(sql, changed)
-            for table in migration.LIVE_TABLES:
+            for table in migration.BASE_TABLES:
                 column = "version" if table == "live_schema_migration" else (
                     "sequence" if table == "live_confirmation" else (
                         "revision" if table == "live_intake_revision" else "id"))

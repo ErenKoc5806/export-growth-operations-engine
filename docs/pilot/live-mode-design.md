@@ -7,7 +7,8 @@ I/O are implemented in the [Windows groundwork](windows-security.md). Further
 hardening/service isolation is deferred under the [first-pilot trust model](trust-model.md).
 #65 closes for that baseline; #13/#68 still require manufacturer/IT acceptance and
 actual target-machine evidence. [#66 maintenance tooling](live-schema.md) adds an
-isolated live schema and verified restore; #67's authorized intake is next.
+isolated live schema and verified restore. [#67 source intake](authorized-intake.md)
+now has a separate gated workspace; real-sample acceptance still needs #13.
 
 ## Pilot workstation decision
 
@@ -45,7 +46,7 @@ flag may bypass them.
 1. Obtain #13's verified product, classification, pricing authority, people,
    contact-source permission, retention/backup owner and baseline. Record the
    approvals in an access-controlled pilot record, separate from example fixtures.
-2. Install the additive [live extension v1](live-schema.md) with explicit origin,
+2. Install the additive [live extension v2](live-schema.md) with explicit origin,
    unique IDs, foreign-key boundaries and append-only records. Keep legacy
    `user_version=29` and its synthetic CHECK constraints intact. No legacy table
    rebuild is needed. Rehearse on a complete legacy database copy and verify
@@ -75,8 +76,9 @@ procedure on a separate path before any live data is entered.
 - Actual target-Windows/filesystem/backup trial and manufacturer/IT review (#68/#13).
 - Target-workstation execution of the implemented migration/restore procedure (#68).
 - Dedicated real source intake and controlled mail/provider boundary (#38).
-- UI for live provenance and recorded human confirmation; no synthetic demo defaults or example
-  capture labeled as delivery.
+- Real manufacturer acceptance of the implemented local source/provenance and
+  recorded human confirmation workspace (#67/#13); this does not enable live
+  Find/Sell/Execute adapters or provider actions.
 - Manufacturer authorization, source terms, approvers and measurement baseline
   from #13. The current code does not satisfy these gates.
 
