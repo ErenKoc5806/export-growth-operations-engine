@@ -41,3 +41,5 @@ jobs:
         run: python -W error::ResourceWarning -m unittest discover -s tests -p test_windows_security.py -v
       - name: Native Windows handle-checked files and secrets
         run: python -W error::ResourceWarning -m unittest discover -s tests -p test_windows_files.py -v
+      - name: Native Windows live schema backup and restore rehearsal
+        run: python -W error::ResourceWarning -m unittest discover -s tests -p test_live_migration.py -v

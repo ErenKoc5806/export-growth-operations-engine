@@ -6,7 +6,8 @@ Native SID identity, local process/session binding, ACL preflight and private-fi
 I/O are implemented in the [Windows groundwork](windows-security.md). Further
 hardening/service isolation is deferred under the [first-pilot trust model](trust-model.md).
 #65 closes for that baseline; #13/#68 still require manufacturer/IT acceptance and
-actual target-machine evidence. Implement #66 and #67 next.
+actual target-machine evidence. [#66 maintenance tooling](live-schema.md) adds an
+isolated live schema and verified restore; #67's authorized intake is next.
 
 ## Pilot workstation decision
 
@@ -44,11 +45,11 @@ flag may bypass them.
 1. Obtain #13's verified product, classification, pricing authority, people,
    contact-source permission, retention/backup owner and baseline. Record the
    approvals in an access-controlled pilot record, separate from example fixtures.
-2. Define a new live namespace/schema with explicit origin on every source and
-   decision, unique IDs, foreign-key boundaries and append-only audit. For a
-   CHECK-constrained SQLite table, use a staged table rebuild with explicit
-   columns and indexes/triggers. Rehearse the exact migration on a copy containing
-   legacy synthetic data and verify counts, foreign keys and immutable history.
+2. Install the additive [live extension v1](live-schema.md) with explicit origin,
+   unique IDs, foreign-key boundaries and append-only records. Keep legacy
+   `user_version=29` and its synthetic CHECK constraints intact. No legacy table
+   rebuild is needed. Rehearse on a complete legacy database copy and verify
+   counts, foreign keys and immutable history.
 3. Stop writers. Take a consistent SQLite backup to a separate, access-controlled
    path **before** the migration; verify its integrity and record a checksum.
    A failed backup or permission check blocks activation. Apply the migration in
@@ -72,7 +73,7 @@ procedure on a separate path before any live data is entered.
 ## Still required to implement
 
 - Actual target-Windows/filesystem/backup trial and manufacturer/IT review (#68/#13).
-- Versioned live schema migration and its rehearsal/rollback tests.
+- Target-workstation execution of the implemented migration/restore procedure (#68).
 - Dedicated real source intake and controlled mail/provider boundary (#38).
 - UI for live provenance and recorded human confirmation; no synthetic demo defaults or example
   capture labeled as delivery.

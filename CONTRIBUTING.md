@@ -13,6 +13,11 @@ The first command checks contracts and synthetic acceptance; CI additionally sca
 
 Numbered SQL migrations must begin with `BEGIN IMMEDIATE;` and end with `COMMIT;`. The store strips those wrappers and executes complete statements under one writer transaction after checking `user_version`. Add each new filename to `MIGRATION_FILES` in order, back up a real pilot database before upgrading, and test both a fresh database and upgrade from the previous version.
 
+The additive `live_migrations` namespace is installed only by the explicit offline
+maintenance tool, with its own version receipt; it must not be added to
+`MIGRATION_FILES` or weaken the legacy synthetic constraints. See
+[live schema and restore procedure](docs/pilot/live-schema.md).
+
 Create a short branch per issue, include a test for behavior changes and update the relevant design note. Open a PR with the issue link, verify GitHub Actions, then merge. The main branch is the working baseline; tag a version only after its acceptance evidence is recorded. Review changes to approval, pricing, external action and migrations especially carefully. At the end of Foundation, request the agreed second-opinion Claude.ai review of the current codebase.
 
 The two components are pinned submodules. Do not copy their generated databases or virtual environments into this product. For a deliberate update, check out a reviewed commit in the component's own repository, advance its pointer in the main repo and record the SHA, contract changes and tests in a separate PR. `git submodule update --init --recursive` restores pinned commits. Both components currently use a top-level Python package called `app`, so do not install them together in one interpreter.
