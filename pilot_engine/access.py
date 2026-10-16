@@ -58,6 +58,7 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
 for _role in (Role.OPERATOR, Role.ADMIN):
     PERMISSIONS[_role] |= frozenset({"READ_LIVE_INTAKE", "RECORD_LIVE_INTAKE",
                                     "RECORD_LIVE_CONFIRMATION"})
+PERMISSIONS[Role.ADMIN] |= frozenset({"PURGE_LIVE_EVIDENCE"})
 
 
 def current_uid() -> int:

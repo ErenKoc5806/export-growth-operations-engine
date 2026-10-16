@@ -9,11 +9,14 @@ rehearsal and full workflow activation.
 ## Start and record authorization
 
 1. Stop other database users and run the [verified maintenance procedure](live-schema.md)
-   with new backup/rehearsal paths to install extension **v2**. This upgrades
-   either legacy v29 without a live extension or released v1. Backup/restore
+   with new backup/rehearsal paths to install extension **v3**. This upgrades
+   either legacy v29 without a live extension or released v1/v2. Backup/restore
    comparisons include existing live history and schema; post-DDL checks preserve
    all existing rows/schema objects. Legacy `user_version=29` stays intact.
-2. Run `python -m pilot_engine.live_operator --database <private-database-path>`.
+2. Complete the [retention/control setup](evidence-retention.md), with reviewed
+   policy/hold/storage evidence and a private external current ledger. A populated
+   upgrade must also register existing recovery copies. Then run
+   `python -m pilot_engine.live_operator --database <private-database-path> --retention-ledger <private-current-ledger-path>`.
    A separate workspace opens on `127.0.0.1` with a new per-process bearer session.
    The launching OS account must pass the existing private storage checks.
    Full `AppConfig` Windows pilot activation remains disabled. This intake app
@@ -78,18 +81,23 @@ reviewed procedure.
 
 ## Storage, access and evidence
 
-V2 adds append-only `live_document`, `live_authorization`,
+V2 added append-only `live_document`, `live_authorization`,
 `live_source_permission`, `live_confirmation_evidence` and `live_intake_stop`.
-V1 and synthetic tables remain unchanged. Read-only viewers inspect evidence;
+V3 adds control binding and purge receipts. Normal writes remain append-only;
+supported offline administrator maintenance narrowly removes reviewed live
+content and restores all guards in one transaction. Legacy synthetic tables
+remain unchanged. Read-only viewers inspect available evidence;
 operators/admins record intake and confirmations, bound to the enrollment OS
 actor. HTTP uses existing session/CSRF/Host/origin checks, no-store/CSP headers
 and redacted logging. Downloads are authenticated binary attachments.
 
 The [trusted-owner limit](trust-model.md) applies: an owner/admin can edit SQLite,
 and a bearer cookie does not authenticate the human at the browser. No new
-service/account isolation is included. Expiry blocks use but does not erase
-immutable evidence/backups. The named owner must apply a reviewed retention and
-deletion process; encryption and automatic deletion are not promised. V1 records
+service/account isolation is included. Expiry blocks use but does not itself erase
+evidence/backups. The named owner must use the [supported retention procedure](evidence-retention.md),
+including document-only versus complete-pilot scope and separate copy disposition.
+Old copies are checked against current external deny history before use.
+Encryption, forensic erasure and automatic deletion are not promised. V1 records
 without authorization do not become implicitly authorized during upgrade.
 
 Automated tests cover missing authorization, all four inputs, stale forms,

@@ -27,7 +27,8 @@ class LiveMigrationTests(unittest.TestCase):
         self.data = root / "ExportGrowthOperations" / "SyntheticTrial"
         self.recovery = root / "recovery"
         self.restore = root / "restore"
-        for directory in (self.data, self.recovery, self.restore):
+        self.retention_dir = root / "retention"
+        for directory in (self.data, self.recovery, self.restore, self.retention_dir):
             directory.mkdir(parents=True, mode=0o700)
             if os.name == "nt":
                 from pilot_engine.windows_security import current_process_sid
@@ -66,7 +67,7 @@ class LiveMigrationTests(unittest.TestCase):
     def test_whole_legacy_database_backup_restore_and_idempotent_restart(self):
         result = self.run_migration()
         self.assertEqual((result.status, result.legacy_version, result.live_version),
-                         ("MIGRATED", 29, 2))
+                         ("MIGRATED", 29, 3))
         for path in (self.path, self.backup, self.rehearsal):
             self.assertEqual(self.snapshot(path), self.before)
             migration._private(path)
@@ -138,13 +139,13 @@ class LiveMigrationTests(unittest.TestCase):
                 self.assertEqual(migration._snapshot(db, include_live=True), full_before)
         self.backup = self.recovery / "upgrade-v2.sqlite3"
         self.rehearsal = self.restore / "upgrade-v2.sqlite3"
-        self.assertEqual(self.run_migration().live_version, 2)
+        self.assertEqual(self.run_migration().live_version, 3)
         with closing(migration._connect(self.path)) as db:
-            self.assertEqual(migration._live_version(db), 2)
+            self.assertEqual(migration._live_version(db), 3)
             self.assertEqual(db.execute("SELECT manufacturer_name FROM live_pilot").fetchone()[0],
                              "FICTIONAL v1 pilot")
             self.assertEqual(db.execute("SELECT version FROM live_schema_migration ORDER BY version").fetchall(),
-                             [(1,), (2,)])
+                             [(1,), (3,)])
         self.assertEqual(self.snapshot(self.path), self.before)
 
     def test_backup_and_restore_failure_never_apply_live_ddl(self):

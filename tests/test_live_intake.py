@@ -18,6 +18,7 @@ from pilot_engine import live_migration as migration
 from pilot_engine.access import LocalAccess, Role, current_principal
 from pilot_engine.live_intake import LiveIntake, _stamp
 from pilot_engine.live_operator import LiveOperator
+from pilot_engine.live_retention import Retention
 from pilot_engine.operator_web import make_handler
 
 
@@ -41,7 +42,11 @@ class LiveIntakeTests(unittest.TestCase):
     def setUp(self):
         migration_tests.LiveMigrationTests.setUp(self)
         migration.migrate(self.path, self.backup, self.rehearsal)
-        self.intake = LiveIntake(self.path)
+        self.ledger = self.retention_dir / "control.sqlite3"
+        self.retention = Retention(self.path, self.ledger)
+        self.retention.initialize("Fixture backup owner", "2099-01-01T00:00:00Z",
+                                  "FICTIONAL-POLICY", "FICTIONAL-STORAGE-REVIEW", reviewed=True)
+        self.intake = LiveIntake(self.path, retention_ledger=self.ledger)
 
     def enroll(self):
         return self.intake.enroll(dict(AUTH), b"FICTIONAL manufacturer approval", b"FICTIONAL IT approval")
@@ -90,7 +95,7 @@ class LiveIntakeTests(unittest.TestCase):
         self.assertEqual(self.intake.view(identity)["status"], "REJECT")
         self.confirm(identity)
         self.confirm(identity, "REVOKE")
-        current = LiveIntake(self.path).view(identity)
+        current = LiveIntake(self.path, retention_ledger=self.ledger).view(identity)
         self.assertEqual(current["status"], "REVOKE")
         self.assertEqual([item["decision"] for item in current["history"]],
                          ["REVOKE", "APPROVE", "REJECT", "APPROVE"])
@@ -114,7 +119,7 @@ class LiveIntakeTests(unittest.TestCase):
     def test_denied_role_and_changed_os_actor_cannot_write_or_impersonate_approver(self):
         self.enroll()
         identity = self.save()
-        viewer = LiveIntake(self.path, LocalAccess({current_principal(): Role.VIEWER}))
+        viewer = LiveIntake(self.path, LocalAccess({current_principal(): Role.VIEWER}), retention_ledger=self.ledger)
         self.assertTrue(viewer.view(identity))
         with self.assertRaises(PermissionError):
             viewer.save("PRODUCT_PROFILE", PROFILE, DOCUMENT, PERMISSION)
@@ -211,7 +216,7 @@ class LiveIntakeTests(unittest.TestCase):
         self.assertIn("BLOCKED", self.intake.view(identity)["status"])
 
     def test_visual_forms_http_csrf_source_isolation_and_private_document_download(self):
-        app = LiveOperator(self.path)
+        app = LiveOperator(self.path, retention_ledger=self.ledger)
         with ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app)) as server:
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
