@@ -6,6 +6,7 @@ import html
 import json
 import os
 import secrets
+import sqlite3
 import sys
 import webbrowser
 from contextlib import closing
@@ -134,7 +135,7 @@ class OperatorWeb:
         """Bind the local bearer session to its launching OS principal.
 
         This is not browser-user authentication or cross-account role switching.
-        Live mode remains disabled until it has a separate authenticated boundary.
+        Full live workflow activation remains gated by the #68 rehearsal.
         """
         try:
             actor, allowed = self.store.access.decision("READ_SUMMARY")
@@ -639,14 +640,19 @@ def _execute(case: dict, step: str, values: dict[str, str], files: dict[str, byt
         raise ValueError("Bu aşamada işlem yapılamaz")
 
 
-def _layout(content: str) -> bytes:
+def _layout(content: str, *, intake: bool = False) -> bytes:
+    subtitle = ("Yetkili kaynak kabulü · dış işlem kapalı" if intake else
+                "Find → Sell → Execute · yerel sentetik deneme")
+    banner = ("<strong>CANLI KAYNAK KABULÜ</strong> · Üretici ve IT kanıtları gerekir. "
+              "Gönderim, ERP işlemi ve sevkiyat kapalıdır. Onaylar operatör beyanıdır."
+              if intake else "<strong>TEST VERİSİ</strong> · Gerçek iletişim, "
+              "teklif gönderimi, ERP işlemi veya sevkiyat yapılmaz.")
     page = ("<!doctype html><html lang='tr'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>Operatör çalışma alanı</title><style>" + STYLE + "</style></head>"
             "<body><header><h1>İhracat Operatör Çalışma Alanı</h1>"
-            "<p>Find → Sell → Execute · yerel sentetik deneme</p></header>"
-            "<main><div class='banner'><strong>TEST VERİSİ</strong> · Gerçek iletişim, "
-            "teklif gönderimi, ERP işlemi veya sevkiyat yapılmaz.</div>" + content
+            "<p>" + subtitle + "</p></header>"
+            "<main><div class='banner'>" + banner + "</div>" + content
             + "</main></body></html>")
     return page.encode("utf-8")
 
@@ -838,6 +844,9 @@ def _save_feedback(app: OperatorWeb, case: dict, values: dict[str, str]) -> None
 
 
 def make_handler(app: OperatorWeb):
+    def layout(content):
+        return _layout(content, intake=getattr(app, "intake_only", False))
+
     class Handler(BaseHTTPRequestHandler):
         def _session_cookie(self) -> str:
             # Cookies are scoped to a host, not a port. Separate concurrent
@@ -845,9 +854,12 @@ def make_handler(app: OperatorWeb):
             return f"ego_session_{self.server.server_port}={app.session}"
 
         def _send(self, code: int, body: bytes, *, cookie: bool = False,
-                  location: str | None = None) -> None:
+                  location: str | None = None, attachment: bool = False) -> None:
             self.send_response(code)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", "application/octet-stream" if attachment else
+                             "text/html; charset=utf-8")
+            if attachment:
+                self.send_header("Content-Disposition", 'attachment; filename="evidence.bin"')
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -889,9 +901,13 @@ def make_handler(app: OperatorWeb):
                 self._send(HTTPStatus.SEE_OTHER, b"", cookie=True, location="/")
                 return
             if not self._authorized():
-                self._send(HTTPStatus.FORBIDDEN, _layout("<h2>Oturum bağlantısı gerekli</h2>"))
+                self._send(HTTPStatus.FORBIDDEN, layout("<h2>Oturum bağlantısı gerekli</h2>"))
                 return
             try:
+                if getattr(app, "intake_only", False):
+                    body, attachment = app.page(parsed.path, parse_qs(parsed.query))
+                    self._send(HTTPStatus.OK, body, attachment=attachment)
+                    return
                 if parsed.path == "/":
                     body = _dashboard(app)
                 elif parsed.path == "/case":
@@ -902,17 +918,17 @@ def make_handler(app: OperatorWeb):
                     saved = parse_qs(parsed.query).get("saved", []) == ["1"]
                     body = _feedback_page(app, self._case_id(), saved=saved)
                 else:
-                    self._send(HTTPStatus.NOT_FOUND, _layout("<h2>Sayfa bulunamadı</h2>"))
+                    self._send(HTTPStatus.NOT_FOUND, layout("<h2>Sayfa bulunamadı</h2>"))
                     return
                 self._send(HTTPStatus.OK, body)
-            except (ValueError, KeyError) as exc:
-                self._send(HTTPStatus.BAD_REQUEST, _layout("<h2>Vaka açılamadı</h2><p>"
+            except (ValueError, KeyError, OSError, sqlite3.Error) as exc:
+                self._send(HTTPStatus.BAD_REQUEST, layout("<h2>Kayıt açılamadı</h2><p>"
                                                            + _h(exc) + "</p>"))
 
         def do_POST(self) -> None:
             parsed = urlsplit(self.path)
             if not self._authorized():
-                self._send(HTTPStatus.FORBIDDEN, _layout(
+                self._send(HTTPStatus.FORBIDDEN, layout(
                     "<h2>Oturum doğrulanamadı</h2><p>Bu pencerenin oturumu bulunamadı. "
                     "PowerShell penceresindeki tam bağlantıyı yeniden açın.</p>"))
                 return
@@ -924,7 +940,7 @@ def make_handler(app: OperatorWeb):
                     or (origin is not None and origin != expected_origin
                         and not local_opaque_origin)
                     or fetch_site == "cross-site"):
-                self._send(HTTPStatus.FORBIDDEN, _layout(
+                self._send(HTTPStatus.FORBIDDEN, layout(
                     "<h2>Formun kaynağı doğrulanamadı</h2><p>PowerShell penceresindeki "
                     "tam 127.0.0.1 bağlantısından yeniden deneyin.</p><p>" +
                     _h("Origin: " + (origin if origin is not None else "yok") +
@@ -938,8 +954,12 @@ def make_handler(app: OperatorWeb):
                 values, files = _parse_form(self.headers.get("Content-Type", ""),
                                             self.rfile.read(length))
                 if not secrets.compare_digest(values.get("csrf", ""), app.csrf):
-                    self._send(HTTPStatus.FORBIDDEN, _layout(
+                    self._send(HTTPStatus.FORBIDDEN, layout(
                         "<h2>Form oturumu değişti</h2><p>Sayfayı yenileyip yeniden deneyin.</p>"))
+                    return
+                if getattr(app, "intake_only", False):
+                    location = app.execute(parsed.path, values, files)
+                    self._send(HTTPStatus.SEE_OTHER, b"", location=location)
                     return
                 if parsed.path == "/demo":
                     if values.get("confirm") != "yes":
@@ -974,7 +994,11 @@ def make_handler(app: OperatorWeb):
                 location = ("/feedback?id=" + handoff_id + "&saved=1" if parsed.path == "/feedback"
                             else "/case?id=" + handoff_id)
                 self._send(HTTPStatus.SEE_OTHER, b"", location=location)
-            except (ValueError, KeyError, TypeError, OSError) as exc:
+            except (ValueError, KeyError, TypeError, OSError, sqlite3.Error) as exc:
+                if getattr(app, "intake_only", False):
+                    self._send(HTTPStatus.BAD_REQUEST, layout(
+                        "<h2>İşlem durduruldu</h2><p>" + _h(exc) + "</p><a href='/'>Kayıtlara dön</a>"))
+                    return
                 try:
                     body = (shipment_page(app, self._case_id(), self._shipment_id(), str(exc))
                             if parsed.path == "/shipments" else

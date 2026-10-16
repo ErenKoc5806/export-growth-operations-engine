@@ -15,7 +15,7 @@ class Role(StrEnum):
 
 
 PERMISSIONS: dict[Role, frozenset[str]] = {
-    Role.VIEWER: frozenset({"READ_SUMMARY"}),
+    Role.VIEWER: frozenset({"READ_SUMMARY", "READ_LIVE_INTAKE"}),
     Role.OPERATOR: frozenset({"READ_SUMMARY", "READ_CONTACT", "SAVE_CASE",
                               "EDIT_QUOTE", "APPROVE_QUOTE", "APPROVE_PO", "TRANSITION",
                               "READ_PROFILE", "EDIT_PROFILE", "APPROVE_PROFILE",
@@ -54,6 +54,10 @@ PERMISSIONS: dict[Role, frozenset[str]] = {
                            "EDIT_EXECUTE", "APPROVE_EXECUTE", "READ_EXECUTE"}),
     Role.SERVICE: frozenset({"READ_SUMMARY"}),
 }
+
+for _role in (Role.OPERATOR, Role.ADMIN):
+    PERMISSIONS[_role] |= frozenset({"READ_LIVE_INTAKE", "RECORD_LIVE_INTAKE",
+                                    "RECORD_LIVE_CONFIRMATION"})
 
 
 def current_uid() -> int:

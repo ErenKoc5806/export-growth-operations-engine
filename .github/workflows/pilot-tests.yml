@@ -43,3 +43,8 @@ jobs:
         run: python -W error::ResourceWarning -m unittest discover -s tests -p test_windows_files.py -v
       - name: Native Windows live schema backup and restore rehearsal
         run: python -W error::ResourceWarning -m unittest discover -s tests -p test_live_migration.py -v
+      - name: Native Windows authorized intake and HTTP forms
+        run: |
+          python -W error::ResourceWarning -m unittest discover -s tests -p test_live_intake.py -v 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/intake-tests.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Select-String -Path "$env:RUNNER_TEMP/intake-tests.log" -Pattern 'ResourceWarning:') { exit 1 }
