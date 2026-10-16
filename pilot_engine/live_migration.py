@@ -1,0 +1,249 @@
+"""Explicit v29 -> live-extension-v1 maintenance, with a verified restore first.
+
+Run with the operator app stopped. A SQLite reserved writer lock prevents new
+writes during backup/rehearsal/migration. No live intake or side effect is enabled.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sqlite3
+import stat
+import time
+from contextlib import closing
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+from pilot_engine.access import current_principal
+from pilot_engine.store import _migration_statements
+
+
+SCHEMA = Path(__file__).parent / "live_migrations" / "001_namespace.sql"
+LIVE_TABLES = frozenset({"live_schema_migration", "live_pilot", "live_source",
+                         "live_intake", "live_intake_revision", "live_confirmation"})
+
+
+def _quote(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _connect(path: Path, *, readonly=False) -> sqlite3.Connection:
+    mode = "ro" if readonly else "rw"
+    db = sqlite3.connect(path.as_uri() + "?mode=" + mode, uri=True, timeout=1)
+    db.execute("PRAGMA foreign_keys = ON")
+    return db
+
+
+def _check(db: sqlite3.Connection) -> None:
+    if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+        raise sqlite3.DatabaseError("Database integrity check failed")
+    if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise sqlite3.IntegrityError("Database foreign key check failed")
+
+
+def _snapshot(db: sqlite3.Connection) -> dict:
+    """Hash every legacy row and schema object; never expose row payloads."""
+    objects = db.execute("SELECT type, name, tbl_name, sql FROM sqlite_master "
+                         "WHERE name NOT GLOB 'live_*' AND tbl_name NOT GLOB 'live_*' "
+                         "ORDER BY type, name").fetchall()
+    digest = hashlib.sha256(json.dumps(objects, ensure_ascii=True).encode())
+    counts = {}
+    for kind, name, _, _ in objects:
+        if kind != "table":
+            continue
+        rows = db.execute("SELECT * FROM " + _quote(name)).fetchall()
+        # Live AUTOINCREMENT must not change the legacy sqlite_sequence digest.
+        if name == "sqlite_sequence":
+            rows = [row for row in rows if not row[0].startswith("live_")]
+        encoded = sorted(json.dumps(row, default=lambda value: {"bytes_hex": value.hex()},
+                                    ensure_ascii=True) for row in rows)
+        counts[name] = len(rows)
+        digest.update(json.dumps([name, encoded], ensure_ascii=True).encode())
+    return {"fingerprint": digest.hexdigest(), "table_counts": counts,
+            "legacy_version": db.execute("PRAGMA user_version").fetchone()[0],
+            "application_id": db.execute("PRAGMA application_id").fetchone()[0]}
+
+
+def _private(path: Path, *, directory=False) -> None:
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("Maintenance paths must be absolute without parent traversal")
+    if os.name == "nt":
+        from pilot_engine.windows_security import current_process_sid, inspect_resource
+
+        sid = current_process_sid()
+        inspect_resource(path, owner_sid=sid, allowed_sids=frozenset({sid}), directory=directory)
+        return
+    if any(part.is_symlink() for part in (path, *path.parents)):
+        raise PermissionError("Maintenance paths must not traverse symlinks")
+    metadata = path.stat()
+    correct_type = stat.S_ISDIR(metadata.st_mode) if directory else stat.S_ISREG(metadata.st_mode)
+    if (not correct_type or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077
+            or (not directory and metadata.st_nlink != 1)):
+        raise PermissionError("Maintenance resources must be private and owned by this OS account")
+
+
+def _new_file(path: Path, content: bytes = b"") -> None:
+    _private(path.parent, directory=True)
+    if os.name == "nt":
+        from pilot_engine.windows_files import WindowsPrivateFiles
+
+        WindowsPrivateFiles(path.parent).write_new(path.name, content)
+    else:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    _private(path)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _copy_database(source: Path, destination: Path) -> None:
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(str(destination) + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            raise FileExistsError("Recovery destination has an existing SQLite sidecar")
+    _new_file(destination)
+    started = time.monotonic()
+
+    def progress(status, remaining, total):
+        if time.monotonic() - started > 30:
+            raise TimeoutError("Database backup exceeded the maintenance limit")
+
+    with closing(_connect(source, readonly=True)) as src, closing(_connect(destination)) as dst:
+        src.backup(dst, pages=128, progress=progress, sleep=0.01)
+        _check(dst)
+    _private(destination)
+    with destination.open("r+b") as stream:
+        os.fsync(stream.fileno())
+
+
+def _live_version(db: sqlite3.Connection) -> int:
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    live_tables = {name for name in tables if name.startswith("live_")}
+    if not live_tables:
+        return 0
+    if live_tables != LIVE_TABLES:
+        raise ValueError("Incomplete or unknown live namespace")
+    version = db.execute("SELECT max(version) FROM live_schema_migration").fetchone()[0]
+    if version != 1:
+        raise ValueError("Unsupported live schema version")
+    expected = {name + suffix for name in LIVE_TABLES for suffix in ("_no_update", "_no_delete")}
+    triggers = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    if not expected <= triggers:
+        raise ValueError("Live append-only guards are missing")
+    return version
+
+
+def _apply(db: sqlite3.Connection) -> None:
+    for statement in _migration_statements(SCHEMA.read_text(encoding="utf-8")):
+        db.execute(statement)
+    for table in sorted(LIVE_TABLES):
+        for action in ("UPDATE", "DELETE"):
+            db.execute(f"CREATE TRIGGER {_quote(table + '_no_' + action.lower())} "
+                       f"BEFORE {action} ON {_quote(table)} BEGIN "
+                       "SELECT RAISE(ABORT, 'live records are append-only'); END")
+
+
+@dataclass(frozen=True)
+class MigrationResult:
+    status: str
+    legacy_version: int
+    live_version: int
+    backup_sha256: str | None = None
+    legacy_fingerprint: str | None = None
+
+
+def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> MigrationResult:
+    """Create new recovery files, rehearse restore, then atomically add live tables.
+
+    Existing recovery artifacts are never overwritten. After failure, retain them
+    for inspection and retry with new paths. No restore ever overwrites the source.
+    """
+    database, backup, rehearsal = (Path(value).absolute() for value in (database, backup, rehearsal))
+    if len({database, backup, rehearsal}) != 3 or any(
+        path.is_relative_to(database.parent) for path in (backup, rehearsal)
+    ):
+        raise ValueError("Recovery paths must be distinct and outside the data directory")
+    _private(database.parent, directory=True)
+    _private(database)
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(str(database) + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            _private(sidecar)
+    with closing(_connect(database)) as db:
+        if db.execute("PRAGMA journal_mode").fetchone()[0].lower() in ("off", "memory"):
+            raise ValueError("A durable SQLite journal mode is required")
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            _check(db)
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version != 29:
+                raise ValueError("Live extension requires the reviewed legacy schema v29")
+            current = _live_version(db)
+            if current:
+                row = db.execute("SELECT backup_sha256, legacy_fingerprint "
+                                 "FROM live_schema_migration WHERE version=1").fetchone()
+                db.rollback()
+                return MigrationResult("ALREADY_MIGRATED", version, current, *row)
+            if not {"manufacturer", "product", "audit_event", "approval_event"} <= {
+                row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }:
+                raise ValueError("Not the expected legacy application database")
+            before = _snapshot(db)
+            _copy_database(database, backup)
+            with closing(_connect(backup, readonly=True)) as copy:
+                if _snapshot(copy) != before:
+                    raise ValueError("Backup does not reproduce the legacy database")
+            checksum = _sha256(backup)
+            _copy_database(backup, rehearsal)
+            with closing(_connect(rehearsal, readonly=True)) as restored:
+                if _snapshot(restored) != before:
+                    raise ValueError("Restore rehearsal does not reproduce the legacy database")
+            if _sha256(backup) != checksum:
+                raise ValueError("Backup changed during restore rehearsal")
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            receipt = {"format_version": 1, "backup_name": backup.name,
+                       "backup_sha256": checksum, "restore_name": rehearsal.name,
+                       "recorded_at_utc": now, **before}
+            manifest = backup.with_name(backup.name + ".manifest.json")
+            _new_file(manifest, json.dumps(receipt, sort_keys=True).encode("utf-8"))
+            _apply(db)
+            principal = current_principal()
+            actor = "uid:" + str(principal) if isinstance(principal, int) else principal
+            db.execute("INSERT INTO live_schema_migration "
+                       "(version, backup_sha256, legacy_fingerprint, actor_id, applied_at_utc) "
+                       "VALUES (1, ?, ?, ?, ?)", (checksum, before["fingerprint"], actor, now))
+            _check(db)
+            if _snapshot(db) != before:
+                raise ValueError("Live extension changed legacy rows or schema")
+            _live_version(db)
+            db.commit()
+            return MigrationResult("MIGRATED", version, 1, checksum, before["fingerprint"])
+        except BaseException:
+            db.rollback()
+            raise
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Offline live-schema migration with restore rehearsal")
+    parser.add_argument("--database", required=True)
+    parser.add_argument("--backup", required=True)
+    parser.add_argument("--rehearsal", required=True)
+    args = parser.parse_args()
+    print(json.dumps(asdict(migrate(args.database, args.backup, args.rehearsal)), sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
