@@ -155,6 +155,21 @@ class LiveExecuteTests(unittest.TestCase):
             self.execute.save(ids, fingerprint, FACT_VALUES, b"FICTIONAL facts", b"FICTIONAL permission")
         self.assertEqual(len(self.execute.view()["orders"]), 1)
 
+    def test_revising_po_identity_cannot_reuse_an_existing_order_or_bypass_duplicate_guard(self):
+        identity = self.save_order()
+        row = self.execute.view(identity)["row"]
+        po = self.intake.view(self.ids[2])["row"]
+        self.intake.save("CUSTOMER_PO", {**intake_tests.PROFILE, **PO, "po_number": "FICTIONAL-OTHER-PO",
+            "source_ref": "FICTIONAL-PO-IDENTITY-CHANGE"}, b"FICTIONAL changed identity", intake_tests.PERMISSION,
+            intake_id=self.ids[2], expected_revision=1, expected_hash=po["payload_sha256"])
+        self.confirm(self.ids[2])
+        _, digest = self.execute.selection(self.ids)
+        with self.assertRaisesRegex(ValueError, "kimliği değişemez"):
+            self.execute.save(self.ids, digest, FACT_VALUES, b"FICTIONAL facts", b"FICTIONAL permission",
+                              expected_revision=1, expected_hash=row["bundle_sha256"])
+        self.assertIn("BLOCKED", self.execute.view(identity)["status"])
+        self.assertEqual(len(self.execute.view()["orders"]), 1)
+
     def test_source_revoke_reapproval_revision_and_stale_forms_invalidate_prior_drafts(self):
         identity = self.save_order()
         self.review_order(identity)

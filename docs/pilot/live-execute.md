@@ -93,7 +93,8 @@ Extension v4 adds `live_order`, immutable `live_order_revision`, normalized
 `live_order_input` bindings, `live_order_review`, `live_order_measurement` and
 `live_order_export`. All have append-only guards and no legacy foreign keys.
 The stable PO intake owns one order; duplicate buyer/PO numbers through another
-intake are refused. Retry of an identical current submission returns its existing
+intake are refused; an existing order cannot be reassigned to a different buyer /
+PO identity through a source revision. Retry of an identical current submission returns its existing
 record; stale forms cannot overwrite a newer version or decision.
 
 Document-purge plans list affected orders and registered export-copy IDs. Purging

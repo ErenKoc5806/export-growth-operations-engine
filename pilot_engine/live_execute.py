@@ -191,6 +191,9 @@ class LiveExecute:
             digest = _hash(encoded.encode())
             order = db.execute("SELECT * FROM live_order WHERE po_intake_id=?", (identities[2],)).fetchone()
             if order:
+                po = inputs[2]["fields"]
+                if (order["buyer_key"], order["po_number_key"]) != (po["buyer"].casefold(), po["po_number"].casefold()):
+                    raise ValueError("Mevcut siparişin alıcı / PO kimliği değişemez; ayrı PO için yeni kaynak kaydı gerekli")
                 row = self.current(db, order["id"])
                 if row["bundle_sha256"] == digest and row["facts_json"] == _json(facts):
                     return order["id"]  # Same submission, including after a lost redirect/restart.
@@ -394,6 +397,7 @@ class LiveExecute:
             return None
 
         def validate(db, ledger):
+            _future(expiry)
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
             retention.guard(db, ledger)
