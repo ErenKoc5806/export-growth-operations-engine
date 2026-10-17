@@ -141,6 +141,79 @@ class LiveExecuteTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.review_order(different)
 
+    def basis_order(self, po_price="24.60", po_basis="100", quantity="1500", total="369.00",
+                    authority_price="0.246", authority_basis="1", suffix="ONE"):
+        price = self.intake.save("PRICE_AUTHORITY", {**intake_tests.PROFILE, **PRICE,
+            "unit_price": authority_price, "price_unit": authority_basis,
+            "source_ref": "FICTIONAL-BASIS-PRICE-" + suffix}, b"FICTIONAL bulk-price authority", intake_tests.PERMISSION)
+        po = self.intake.save("CUSTOMER_PO", {**intake_tests.PROFILE, **PO,
+            "po_number": "FICTIONAL-BASIS-PO-" + suffix, "quantity": quantity, "unit_price": po_price,
+            "price_unit": po_basis, "total": total, "source_ref": "FICTIONAL-BASIS-PO-" + suffix},
+            b"FICTIONAL bulk-price PO", intake_tests.PERMISSION)
+        for identity in (price, po):
+            self.confirm(identity)
+        ids = [self.ids[0], price, po]
+        _, digest = self.execute.selection(ids)
+        return self.execute.save(ids, digest, {**FACT_VALUES, "packing_quantity": quantity},
+                                 b"FICTIONAL bulk packing facts", b"FICTIONAL bulk facts permission")
+
+    def test_price_per_hundred_and_thousand_match_equivalent_authority_and_render_original_basis(self):
+        for suffix, authority_price, authority_basis in (("PIECE", "0.246", "1"), ("THOUSAND", "246", "1000")):
+            with self.subTest(suffix=suffix):
+                identity = self.basis_order(authority_price=authority_price, authority_basis=authority_basis, suffix=suffix)
+                self.review_order(identity)
+                view = self.execute.view(identity)
+                self.assertEqual(view["status"], "APPROVE")
+                invoice = view["bundle"]["documents"]["COMMERCIAL_INVOICE_DRAFT"]
+                self.assertEqual(invoice["Mal bedeli"], "369.00")
+                self.assertEqual(invoice["Belgedeki fiyat"], "24.60")
+                self.assertEqual(invoice["Belgedeki fiyatın geçerli olduğu miktar"], "100 PCS")
+                self.assertEqual(invoice["Fiyat hesabı"], "1500 × 24.60 / 100 = 369.00 EUR")
+                artifact, _ = self.execute.download(self.export_order(identity))
+                self.assertIn("100 PCS".encode(), artifact)
+                self.assertNotIn("Birim fiyat</th><td>24.60".encode(), artifact)
+
+    def test_equal_quoted_prices_with_different_price_units_are_not_equivalent(self):
+        identity = self.basis_order(authority_price="24.60", authority_basis="1")
+        requirements = " ".join(self.execute.view(identity)["bundle"]["requirements"])
+        self.assertIn("price_unit", requirements)
+        with self.assertRaisesRegex(ValueError, "gereksinimleri"):
+            self.review_order(identity)
+
+    def test_price_basis_total_validation_is_exact_and_rejects_silent_rounding_or_bad_basis(self):
+        base = {**PO, "quantity": "1500", "unit_price": "24.60", "price_unit": "100", "total": "369.00"}
+        self.assertEqual(self.intake.validate("CUSTOMER_PO", base)["price_unit"], "100")
+        self.assertEqual(self.intake.validate("CUSTOMER_PO", PO)["price_unit"], "1")
+        for changes in ({"price_unit": "0"}, {"price_unit": "NaN"}, {"price_unit": "-1"},
+                        {"price_unit": ""}, {"total": "36900.00"}, {"total": "369.01"},
+                        {"quantity": "1", "unit_price": "1", "price_unit": "3", "total": "0.333333"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.intake.validate("CUSTOMER_PO", {**base, **changes})
+        identity = self.basis_order(po_price="1", po_basis="3", quantity="3", total="1",
+                                    authority_price="1", authority_basis="3")
+        self.assertEqual(self.execute.view(identity)["status"], "REVIEW_REQUIRED")
+        self.review_order(identity)
+
+    def test_legacy_sources_without_price_unit_remain_usable_after_restart(self):
+        original = self.intake.validate
+
+        def legacy_payload(kind, values):
+            data = original(kind, values)
+            data.pop("price_unit", None)
+            return data
+
+        with patch.object(self.intake, "validate", legacy_payload):
+            identity = self.basis_order(po_price="10.00", po_basis="1", quantity="2", total="20.00",
+                                        authority_price="10.00", authority_basis="1", suffix="LEGACY")
+            self.review_order(identity)
+            export = self.export_order(identity)
+            artifact = self.execute.download(export)[0]
+        restarted = LiveExecute(LiveIntake(self.path, retention_ledger=self.ledger))
+        fields = restarted.view(identity)["bundle"]["inputs"][2]["fields"]
+        self.assertNotIn("price_unit", fields)
+        self.assertEqual(restarted.view(identity)["status"], "APPROVE")
+        self.assertEqual(restarted.download(export)[0], artifact)
+
     def test_duplicate_po_source_and_export_retention_longer_than_inputs_are_rejected(self):
         identity = self.save_order()
         self.review_order(identity)

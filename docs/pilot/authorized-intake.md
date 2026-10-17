@@ -43,9 +43,9 @@ rehearsal and full workflow activation.
 | Source | Required content |
 | --- | --- |
 | Product/classification | SKU, name, drawing/dimensions, material, use, reviewed HS6 and review reference |
-| Price/tax authority | SKU, unit, positive unit price, EUR, payment terms, Incoterm/place, tax/price authority reference, validity |
+| Price/tax authority | SKU, unit, positive quoted price and its price quantity (e.g. per 1/100/1000 units), EUR, payment terms, Incoterm/place, tax/price authority reference, validity |
 | Buyer source | Company, DE, actual source website, role and fit evidence; no contact or outreach action |
-| Customer PO | PO reference, buyer, SKU, quantity/unit/price/total, EUR, payment terms, Incoterm/place and delivery |
+| Customer PO | PO reference, buyer, SKU, quantity/unit/quoted-price/price-quantity/total, EUR, payment terms, Incoterm/place and delivery |
 
 Scope is HS6 732690 / Germany / EUR. A recorded HS review is not automated tariff
 classification. A PO intake is not quote matching, an order or a tax calculation.
@@ -115,3 +115,21 @@ viewer denial, atomic writes and immutable history. Actual HTTP multipart forms
 exercise enrollment, intake, confirmation, CSRF/origin denial, synthetic-route
 isolation, escaped text and evidence download. Native Windows runs the same
 tests. Real consent and target-workstation acceptance remain unevidenced.
+
+## Quoted-price quantity
+
+Price authority and PO forms record `unit_price` as the price printed on the source
+and `price_unit` as the quantity that price covers. For a fictional quote of
+24.60 EUR per 100 PCS and 1500 PCS ordered, the goods value is 369.00 EUR. The
+price quantity is not a package size; record those separately. Preserve the quoted
+price and basis rather than silently treating a per-100 price as a piece price.
+The PO must satisfy `quantity × quoted_price = total × price_unit` exactly.
+Authority comparisons use exact cross-products, so per-piece and per-hundred
+authorities can match without division/rounding. No automatic rounding or
+conditional early-payment discount is applied. An authoritative rounding policy
+would require separate reviewed support if an exact total does not match.
+
+A missing price quantity on legacy/API inputs means 1, preserving previous
+semantics. New forms show the price quantity explicitly. Existing revision JSON,
+hashes and registered artifacts remain untouched. Do not put actual order numbers,
+customer pricing, contacts or original documents in public fixtures.

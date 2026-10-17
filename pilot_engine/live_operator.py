@@ -94,7 +94,7 @@ class LiveOperator:
         fields += _hidden("revision", row.get("revision", 0)) + _hidden("digest", row.get("payload_sha256", ""))
         for name, label in FIELDS[kind].items():
             fields += (_timefield(name, label, previous.get(name, "")) if name == "valid_until_utc"
-                       else _field(name, label, previous.get(name, "")))
+                       else _field(name, label, previous.get(name, "1" if name == "price_unit" else "")))
         fields += "<h3>Kaynak ve kullanım izni</h3>"
         for name, label in (("source_ref", "Bu kaynak sürümünün özgün referansı"),
             ("permission_ref", "Kaynak kullanım izni referansı"), ("terms_ref", "Kaynak koşulları referansı"),
