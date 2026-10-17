@@ -116,8 +116,12 @@ class LiveExecute:
         for key in ("sku", "unit", "currency", "payment_terms", "incoterm"):
             if po[key] != price[key] or (key == "sku" and po[key] != profile[key]):
                 requirements.append("PO / yetkili kaynak farkı: " + key + "; yetkili kaynağı düzeltip yeniden onaylayın")
-        if _amount(po["unit_price"]) != _amount(price["unit_price"]):
-            requirements.append("PO / fiyat yetkisi farkı: unit_price; yeni tam sürüm fiyat onayı gerekli")
+        # Compare rational prices exactly; do not round a per-100/per-1000 quote to a piece price.
+        with localcontext() as precision:
+            precision.prec = 50
+            if (_amount(po["unit_price"]) * _amount(price.get("price_unit", "1"))
+                    != _amount(price["unit_price"]) * _amount(po.get("price_unit", "1"))):
+                requirements.append("PO / fiyat yetkisi farkı: unit_price / price_unit; yeni tam sürüm fiyat onayı gerekli")
         if not re.fullmatch(r"(?:EXW|FCA|CPT|CIP|DAP|DPU|DDP|FAS|FOB|CFR|CIF)\s+\S.+", po["incoterm"]):
             requirements.append("Incoterm kodu ve adlandırılmış yer birlikte gerekli")
         for key, country in (("origin_country", "TR"), ("destination_country", "DE")):
@@ -159,6 +163,10 @@ class LiveExecute:
             "Vergi yetkisi": price["tax_authority_ref"] + " / " + facts["tax_ref"],
             "Vergi tutarı": facts["tax_amount"], "Ek masraf": facts["charges"],
             "İndirim": facts["discount"], "İncelenmiş toplam EUR": total}
+        if _amount(po.get("price_unit", "1")) != 1:
+            invoice["Belgedeki fiyatın geçerli olduğu miktar"] = po["price_unit"] + " " + po["unit"]
+            invoice["Fiyat hesabı"] = po["quantity"] + " × " + po["unit_price"] + " / " + po["price_unit"] + " = " + po["total"] + " " + po["currency"]
+            invoice["Belgedeki fiyat"] = invoice.pop("Birim fiyat")
         packing = {"PO": po["po_number"], "Ürün kodu": po["sku"], "Ürün": profile["product_name"],
             "Teslim alıcı / adres": facts["ship_to"], "Miktar": facts["packing_quantity"], "Birim": po["unit"],
             "Paket adedi": facts["packages"], "Net kg": facts["net_kg"], "Brüt kg": facts["gross_kg"],

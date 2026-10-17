@@ -55,7 +55,7 @@ authorized operator; actual computer/backup checks must still be evidenced.
    PO and authority. Differences block approval: revise the appropriate source,
    obtain its exact-version approval, then regenerate the local order. This
    release does not implement discretionary price overrides or a PO amendment
-   workflow. The quantity × price PO total and reviewed tax / charges / discount
+   workflow. The quantity × quoted price / price quantity PO total and reviewed tax / charges / discount
    produce the displayed draft total using decimal arithmetic.
 6. The named reviewer (the same operator in solo mode) reviews the **entire exact bundle/hash**, including the PO
    differences and checklist. Record decision, reason, method, reference, time and
@@ -126,3 +126,13 @@ hashes privately, have the registered reviewer confirm under the recorded model,
 minutes plus correction/rework counts. Include source invalidation, export-copy
 reconciliation/disposition and a separate-path restore check. Keep #75 open until
 that evidence exists. No actual manufacturer evidence belongs in GitHub fixtures.
+
+## Price quoted per 100 / 1000 units
+
+The local service compares prices using both quoted value and its price quantity.
+Equivalent per-piece/per-hundred/per-thousand authorities match exactly. Draft
+invoices retain the original quoted value and explicitly show a non-unit price
+quantity and calculation. They do not mislabel a per-100 quote as a piece price.
+Legacy sources without `price_unit` retain basis 1 and unchanged artifact bytes;
+there is no schema migration or rewrite of previous approvals. Conditional payment
+discounts remain reviewed facts and are not inferred from the PO's terms.

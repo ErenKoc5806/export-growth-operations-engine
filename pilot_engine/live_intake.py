@@ -22,13 +22,13 @@ FIELDS = {
     "PRODUCT_PROFILE": {"sku": "Ürün kodu", "product_name": "Ürün adı",
         "dimensions": "Çizim / ölçüler", "material": "Malzeme", "intended_use": "Kullanım amacı",
         "hs6": "İncelenmiş HS6", "classification_ref": "Sınıflandırma inceleme referansı"},
-    "PRICE_AUTHORITY": {"sku": "Ürün kodu", "unit_price": "Birim fiyat", "currency": "Para birimi",
+    "PRICE_AUTHORITY": {"sku": "Ürün kodu", "unit_price": "Belgedeki fiyat", "price_unit": "Fiyat miktarı (örn. 1 veya 100)", "currency": "Para birimi",
         "unit": "Birim", "payment_terms": "Ödeme koşulları", "incoterm": "Incoterm ve yer",
         "tax_authority_ref": "Vergi / fiyat yetkisi referansı", "valid_until_utc": "Fiyat geçerlilik sonu"},
     "BUYER_SOURCE": {"company": "Alıcı şirket", "country": "Ülke kodu", "website": "Kaynak web adresi",
         "role": "Alıcının rolü", "fit_evidence": "Ürün ve alıcı uygunluğu kanıtı"},
     "CUSTOMER_PO": {"po_number": "Müşteri sipariş numarası", "buyer": "Alıcı şirket",
-        "sku": "Ürün kodu", "quantity": "Miktar", "unit": "Birim", "unit_price": "Birim fiyat",
+        "sku": "Ürün kodu", "quantity": "Miktar", "unit": "Birim", "unit_price": "Belgedeki fiyat", "price_unit": "Fiyat miktarı (örn. 1 veya 100)",
         "currency": "Para birimi", "total": "Toplam", "payment_terms": "Ödeme koşulları",
         "incoterm": "Incoterm ve yer", "delivery": "Talep edilen teslimat"},
 }
@@ -226,21 +226,23 @@ class LiveIntake:
     def validate(self, kind, values):
         if kind not in FIELDS:
             raise ValueError("Kaynak türünü seçin")
-        data = {key: _text(values.get(key), label) for key, label in FIELDS[kind].items()}
+        data = {key: _text(values.get(key, "1" if key == "price_unit" else None), label)
+                for key, label in FIELDS[kind].items()}
         if "hs6" in data and data["hs6"] != "732690":
             raise ValueError("Pilot kapsamı HS6 732690")
         if "currency" in data and data["currency"] != "EUR":
             raise ValueError("Pilot para birimi EUR")
         if "country" in data and data["country"] != "DE":
             raise ValueError("Pilot hedef ülkesi DE")
-        for key in ("unit_price", "quantity", "total"):
+        for key in ("unit_price", "quantity", "total", "price_unit"):
             if key in data:
                 _amount(data[key])
         if "total" in data:
             with localcontext() as precision:
                 precision.prec = 50
-                if _amount(data["quantity"]) * _amount(data["unit_price"]) != _amount(data["total"]):
-                    raise ValueError("PO miktar × birim fiyat toplamla eşleşmeli")
+                if (_amount(data["quantity"]) * _amount(data["unit_price"])
+                        != _amount(data["total"]) * _amount(data["price_unit"])):
+                    raise ValueError("PO miktar × belgedeki fiyat / fiyat miktarı toplamla eşleşmeli")
         if "valid_until_utc" in data:
             data["valid_until_utc"] = _future(data["valid_until_utc"])
         if "website" in data:
