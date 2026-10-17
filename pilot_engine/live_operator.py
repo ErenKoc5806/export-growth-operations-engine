@@ -7,7 +7,7 @@ import webbrowser
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 
-from pilot_engine.live_intake import FIELDS, KINDS, LiveIntake
+from pilot_engine.live_intake import FIELDS, KINDS, LiveIntake, SELF_REVIEW, DISTINCT_REVIEW, review_label
 from pilot_engine.operator_web import _field, _h, _layout, _utc, make_handler
 
 
@@ -61,18 +61,22 @@ class LiveOperator:
                 + "<button name='confirm' value='yes'>" + _h(button) + "</button></form>")
 
     def enrollment(self):
-        fields = ""
+        fields = ("<label>İnceleme modeli<select name='review_model'>"
+                  "<option value='" + SELF_REVIEW + "'>Tek kişi — kendi çalışmamı ayrıca incelerim</option>"
+                  "<option value='" + DISTINCT_REVIEW + "'>Ayrı kayıtlı kişi — operatör beyanı</option></select></label>"
+                  "<label><input type='checkbox' name='self_review_accepted' value='yes'>"
+                  "Tek kişi modelinde işlemi yapan ve inceleyen aynı kişidir; bağımsız ikinci kişi kontrolü yoktur.</label>")
         for name, label in (("manufacturer_name", "Üretici"), ("authorization_ref", "Üretici yetki referansı"),
-            ("operator_name", "Operatör adı"), ("approver_name", "Ayrı insan onaylayan adı"),
+            ("operator_name", "Operatör adı"), ("approver_name", "İnceleyen adı (tek kişi modelinde operatörle aynı)"),
             ("approver_role", "Onaylayanın yetkili rolü"), ("authorizer_name", "Üretici adına izin veren"),
-            ("it_reviewer", "IT kabulünü veren"), ("baseline", "Mevcut süreler ve pilot başarı ölçütleri"),
+            ("it_reviewer", "Bilgisayar / depolama incelemesini kaydeden"), ("baseline", "Mevcut süreler ve pilot başarı ölçütleri"),
             ("backup_owner", "Yedek / saklama sorumlusu")):
             fields += _field(name, label)
         fields += _timefield("expires_at_utc", "Yetki geçerlilik sonu")
         fields += _proof("manufacturer_document", "Üretici yetkilendirme ve veri kullanım izni")
         fields += _proof("it_document", "IT kabulü / hesap ve depolama düzeni kanıtı")
         for name, label in (("manufacturer_accepted", "Üretici bu kişileri ve pilot kapsamını yetkilendirdi"),
-            ("it_accepted", "IT hesap, veri ve yedek düzenini kabul etti"),
+            ("it_accepted", "Hesap, veri ve yedek düzeni incelendi ve kabul edildi"),
             ("trust_accepted", "Üretici / IT, veri sahibi ve yöneticinin SQLite kontrollerini aşabildiğini kabul etti"),
             ("permission_accepted", "Kaynakların kullanım izinleri ve saklama sorumluluğu teyit edildi")):
             fields += "<label><input type='checkbox' name='" + name + "' value='yes' required>" + label + "</label>"
@@ -128,7 +132,7 @@ class LiveOperator:
                     continue
                 doc = self.intake.read_document(db, doc_id)
                 body += "<p>" + _document(doc_id, label) + " · SHA-256: " + _h(doc["sha256"]) + "</p>"
-        body += "<h3>İnsan onayı</h3><p>Onaylayan: " + _h(pilot["approver_name"]) + " · " + _h(pilot["approver_role"])
+        body += "<h3>" + _h(review_label(pilot)) + "</h3><p>Onaylayan: " + _h(pilot["approver_name"]) + " · " + _h(pilot["approver_role"])
         body += " · Yetki: " + _h(pilot["authorization_ref"]) + "</p><p>OPERATÖR BEYANI: "
         body += "insanın teyidi kaydedilir; bağımsız onaylayan oturumu doğrulanmaz. Bu onay gönderime veya siparişe dönüşmez.</p>"
         fixed = _hidden("intake_id", identity) + _hidden("revision", row["revision"]) + _hidden("digest", row["payload_sha256"])
@@ -181,6 +185,7 @@ class LiveOperator:
             pilot = data["pilot"]
             body += "<p><a href='/execute'>Canlı Execute — yerel sipariş ve taslaklar</a></p>"
             body += "<h2>" + _h(pilot["manufacturer_name"]) + " — yetkili kaynaklar</h2>"
+            body += "<p>" + _h(review_label(pilot)) + "</p>"
             body += "<p>Operatör: " + _h(pilot["operator_name"]) + " · Onaylayan: " + _h(pilot["approver_name"]) + "</p>"
             body += "<p>Yetki: " + _h(pilot["authorization_ref"]) + " · Geçerlilik: " + _h(pilot["expires_at_utc"]) + "</p>"
             with self.intake.transaction(write=False) as db:

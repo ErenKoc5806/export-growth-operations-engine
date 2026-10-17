@@ -16,7 +16,7 @@ import test_live_intake as intake_tests
 from pilot_engine import live_migration as migration
 from pilot_engine.access import LocalAccess, Role, current_principal
 from pilot_engine.live_execute import FACTS, INPUT_KINDS, LiveExecute
-from pilot_engine.live_intake import LiveIntake, _stamp
+from pilot_engine.live_intake import LiveIntake, _stamp, SELF_REVIEW, DISTINCT_REVIEW
 from pilot_engine.live_operator import LiveOperator
 from pilot_engine.operator_web import make_handler
 
@@ -413,6 +413,26 @@ class LiveExecuteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "v4"):
             LiveExecute(self.intake)
 
+    def test_legacy_two_person_scope_and_existing_artifact_keep_their_original_model(self):
+        identity = self.save_order()
+        self.review_order(identity)
+        export = self.export_order(identity)
+        artifact, _ = self.execute.download(export)
+        row = self.execute.view(identity)["row"]
+        self.assertNotIn("review_model", json.loads(row["bundle_json"]))
+        # Reconstruct a pre-policy-field enrollment without changing its actual people.
+        with closing(migration._connect(self.path)) as db, db:
+            guard = db.execute("SELECT sql FROM sqlite_master WHERE name='live_authorization_no_update'").fetchone()[0]
+            scope = json.loads(db.execute("SELECT scope_json FROM live_authorization").fetchone()[0])
+            scope.pop("review_model")
+            db.execute("DROP TRIGGER live_authorization_no_update")
+            db.execute("UPDATE live_authorization SET scope_json=?", (json.dumps(scope),))
+            db.execute(guard)
+        restarted = LiveExecute(LiveIntake(self.path, retention_ledger=self.ledger))
+        self.assertEqual(restarted.view(identity)["pilot"]["review_model"], DISTINCT_REVIEW)
+        self.assertEqual(restarted.view(identity)["row"]["bundle_sha256"], row["bundle_sha256"])
+        self.assertEqual(restarted.download(export)[0], artifact)
+
     def test_guided_http_selection_save_review_and_authenticated_attachment(self):
         app = LiveOperator(self.path, retention_ledger=self.ledger)
         with ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app)) as server:
@@ -475,6 +495,86 @@ class LiveExecuteTests(unittest.TestCase):
                 connection.close()
                 server.shutdown()
                 thread.join(timeout=5)
+
+
+class SingleOperatorReviewTests(unittest.TestCase):
+    snapshot = LiveExecuteTests.snapshot
+    confirm = LiveExecuteTests.confirm
+    save_order = LiveExecuteTests.save_order
+    review_order = LiveExecuteTests.review_order
+    export_order = LiveExecuteTests.export_order
+
+    def enroll(self):
+        values = {**intake_tests.AUTH, "operator_name": intake_tests.AUTH["approver_name"],
+                  "review_model": SELF_REVIEW, "self_review_accepted": "yes"}
+        return self.intake.enroll(values, b"FICTIONAL sole-authority self-review permission",
+                                  b"FICTIONAL workstation storage review")
+
+    def setUp(self):
+        LiveExecuteTests.setUp(self)
+
+    def test_one_person_can_intake_review_export_and_restart_with_truthful_model(self):
+        identity = self.save_order()
+        self.assertEqual(self.execute.view(identity)["status"], "REVIEW_REQUIRED")
+        with self.assertRaisesRegex(ValueError, "insan onayı"):
+            self.export_order(identity)
+        self.review_order(identity)
+        current = self.execute.view(identity)
+        self.assertEqual(current["status"], "APPROVE")
+        self.assertEqual(current["pilot"]["operator_name"], current["pilot"]["approver_name"])
+        self.assertEqual(current["bundle"]["review_model"], SELF_REVIEW)
+        scope = json.loads(current["pilot"]["scope_json"])
+        self.assertIs(scope["self_review_accepted"], True)
+        self.assertEqual(current["history"][0]["identity_basis"], "OPERATOR_ATTESTATION")
+        export = self.export_order(identity)
+        artifact, copy = self.execute.download(export)
+        self.assertIn(b"SELF REVIEW", artifact)
+        self.assertIn(SELF_REVIEW.encode(), artifact)
+        migration._new_file(Path(copy["path"]), artifact)
+        self.execute.finish_export(export)
+        restarted = LiveExecute(LiveIntake(self.path, retention_ledger=self.ledger))
+        self.assertEqual(restarted.download(export)[0], artifact)
+        self.assertEqual(restarted.view(identity)["pilot"]["review_model"], SELF_REVIEW)
+        self.assertEqual(self.snapshot(self.path), self.before)
+
+    def test_solo_policy_needs_explicit_same_person_and_acknowledgment(self):
+        base = {**intake_tests.AUTH, "operator_name": intake_tests.AUTH["approver_name"],
+                "review_model": SELF_REVIEW, "self_review_accepted": "yes"}
+        for changes in ({"self_review_accepted": ""}, {"self_review_accepted": "true"},
+                        {"review_model": "UNKNOWN"}, {"review_model": DISTINCT_REVIEW},
+                        {"operator_name": "FICTIONAL different operator"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.intake.enroll({**base, **changes}, b"FICTIONAL authority", b"FICTIONAL IT")
+        self.assertEqual(self.intake.view()["pilot"]["review_model"], SELF_REVIEW)
+
+    def test_source_revoke_and_unlisted_reviewer_still_block_solo_drafts(self):
+        identity = self.save_order()
+        with self.assertRaises(ValueError):
+            self.review_order(identity, approver_name="FICTIONAL unlisted reviewer")
+        self.review_order(identity)
+        export = self.export_order(identity)
+        self.confirm(self.ids[0], "REVOKE")
+        with self.assertRaises(ValueError):
+            self.execute.download(export)
+        self.confirm(self.ids[0])
+        self.assertIn("BLOCKED", self.execute.view(identity)["status"])
+        # A new approval of an input never silently revives an old output review.
+        self.assertEqual(self.execute.view(identity)["pilot"]["review_model"], SELF_REVIEW)
+
+    def test_solo_ui_and_download_label_the_actual_review_model(self):
+        app = LiveOperator(self.path, retention_ledger=self.ledger)
+        self.assertIn("self_review_accepted", app.enrollment())
+        source_page, _ = app.page("/record", {"id": [self.ids[0]]})
+        self.assertIn("ÖZ İNCELEME", source_page.decode())
+        identity = self.save_order()
+        order_page, _ = app.page("/execute/order", {"id": [identity]})
+        self.assertIn("ÖZ İNCELEME", order_page.decode())
+        self.assertNotIn("Ayrı insan incelemesi", order_page.decode())
+        self.review_order(identity)
+        export = self.export_order(identity)
+        artifact, filename = app.page("/execute/download", {"id": [export]})
+        self.assertIn("bağımsız ikinci kişi onayı yok".encode(), artifact)
+        self.assertTrue(filename.endswith(".html"))
 
 
 if __name__ == "__main__":

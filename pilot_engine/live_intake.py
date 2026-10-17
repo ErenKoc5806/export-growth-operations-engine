@@ -36,6 +36,29 @@ KINDS = {"PRODUCT_PROFILE": "Ürün ve sınıflandırma", "PRICE_AUTHORITY": "Fi
          "BUYER_SOURCE": "Alıcı kaynağı", "CUSTOMER_PO": "Müşteri PO"}
 
 
+DISTINCT_REVIEW = "DISTINCT_PERSON_ATTESTATION"
+SELF_REVIEW = "SINGLE_OPERATOR_SELF_REVIEW"
+
+
+def _review_model(operator, approver, model, accepted):
+    same_person = operator.casefold() == approver.casefold()
+    if model == SELF_REVIEW:
+        if not same_person or accepted is not True:
+            raise ValueError("Tek kişi öz incelemesi: aynı kişi ve ikinci kişi kontrolü bulunmadığının açık kabulü gerekli")
+    elif model == DISTINCT_REVIEW:
+        if same_person:
+            raise ValueError("Bu modelde operatör ve onaylayan ayrı kişiler olmalı; tek kişi için öz inceleme modelini seçin")
+    else:
+        raise ValueError("Geçerli kayıtlı inceleme modeli gerekli")
+    return model
+
+
+def review_label(pilot):
+    if pilot["review_model"] == SELF_REVIEW:
+        return "ÖZ İNCELEME — tek kişi; bağımsız ikinci kişi onayı yok"
+    return "AYRI KİŞİ İNCELEMESİ — operatör beyanı; bağımsız oturum doğrulanmaz"
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -147,8 +170,10 @@ class LiveIntake:
         keys = ("manufacturer_name", "authorization_ref", "operator_name", "approver_name",
                 "approver_role", "authorizer_name", "it_reviewer", "baseline", "backup_owner")
         data = {key: _text(values.get(key), key) for key in keys}
-        if data["operator_name"].casefold() == data["approver_name"].casefold():
-            raise ValueError("Operatör ve onaylayan ayrı kişiler olmalı")
+        data["review_model"] = _review_model(data["operator_name"], data["approver_name"],
+            values.get("review_model", DISTINCT_REVIEW), values.get("self_review_accepted") == "yes")
+        if data["review_model"] == SELF_REVIEW:
+            data["self_review_accepted"] = True
         if any(values.get(key) != "yes" for key in
                ("manufacturer_accepted", "it_accepted", "trust_accepted", "permission_accepted")):
             raise ValueError("Üretici / IT kabulü ve veri işleme izni kanıtları gerekli")
@@ -173,7 +198,14 @@ class LiveIntake:
                           "a.scope_json FROM live_pilot p JOIN live_authorization a ON a.pilot_id=p.id").fetchall()
         if len(rows) > 1:
             raise ValueError("Bu sürüm tek yetkili üretici destekler")
-        return dict(rows[0]) if rows else None
+        if not rows:
+            return None
+        pilot = dict(rows[0])
+        scope = json.loads(pilot["scope_json"])
+        # Old enrollments keep their original two-person policy; request fields cannot switch it.
+        pilot["review_model"] = _review_model(pilot["operator_name"], pilot["approver_name"],
+            scope.get("review_model", DISTINCT_REVIEW), scope.get("self_review_accepted") is True)
+        return pilot
 
     def gate(self, db):
         pilot = self.pilot(db)

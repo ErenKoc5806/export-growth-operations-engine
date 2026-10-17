@@ -28,7 +28,10 @@ completed the synthetic walkthrough in PowerShell on Windows, and a WSL setup is
 an acceptable operator journey. Keep `AppConfig`'s Windows pilot refusal until
 #66/#67 implementation and #68's target-machine rehearsal satisfy the activation
 procedure. Use the process SID as the recording OS actor, ordinary private-file
-controls and one named human approver's recorded confirmation. This does not
+controls and a named reviewer's exact-version confirmation. The primary solo
+pilot uses explicit self-review by the authorized operator; its outputs disclose
+that no independent second-person review exists. Legacy/separate-person
+enrollments retain their original model. This does not
 authenticate the browser user or isolate the database owner. Manufacturer/IT must
 accept that limit in #13; separate OS accounts and a service are not first-pilot
 prerequisites. Do not infer approval from an actor label.
@@ -46,7 +49,7 @@ No installer or accepted actual-workstation activation is supplied yet.
 | Find | `find_handoff.py` requires synthetic origin and `example.*` candidate domain; `manual_contact.py` and `sell_drafts.py` require synthetic handoff. | Authorized manufacturer profile, lawful contact source/terms, retention and reviewed buyer/route evidence before handoff. |
 | Sell | `inbound.py` requires `SYN-` references; `rfq.py`, `quotations.py` and `sell_delivery.py` require synthetic states, price origin and exact `example.*` recipients. | Separate live intake and provider adapter. #38 owns exact-content approval, named independent approver, provider idempotency, bounce/suppression and uncertain outcomes. |
 | Execute | `execute_order.py`, `execute_operations.py`, `execute_documents.py` and `shipments.py` require `SYN-` evidence and synthetic states. | Authorized real PO, price/tax authority and reviewed source documents. ERP, carrier and legal invoice actions remain separate explicit gates. |
-| UI/config | `operator_web.py` is synthetic-only; `config.py` refuses Windows pilot and checks Unix file ownership elsewhere. | Private local storage, named operator/approver with recorded human confirmation, and live provenance screens under the accepted trust model. No live operation from the synthetic demo route. |
+| UI/config | `operator_web.py` is synthetic-only; `config.py` refuses Windows pilot and checks Unix file ownership elsewhere. | Private local storage, named operator/reviewer with recorded self-review or separate-person attestation, and live provenance screens under the accepted trust model. No live operation from the synthetic demo route. |
 
 The inventory should be re-run against all `SYNTHETIC`, `SYN-` and `example.*`
 checks before each live adapter is built; no global replacement or environment

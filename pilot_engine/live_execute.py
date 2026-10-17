@@ -10,7 +10,7 @@ import sqlite3
 from uuid import uuid4
 
 from pilot_engine.live_intake import (_amount, _future, _hash, _json, _now, _stamp,
-                                       _text, _time)
+                                       _text, _time, SELF_REVIEW)
 from pilot_engine.live_migration import _connect, _live_version, _private, _sha256
 
 
@@ -48,6 +48,8 @@ def render_bundle(bundle, digest, review=None):
     body += "<body><h1>DRAFT — YAYIMLANMAMIŞ / UNRELEASED</h1>"
     body += "<p>Yerel inceleme taslakları. Hukuki fatura düzenleme veya sevkiyat izni değildir.</p>"
     body += "<p>Tam içerik SHA-256: " + h(digest) + "</p>"
+    if bundle.get("review_model") == SELF_REVIEW:
+        body += "<p><strong>ÖZ İNCELEME / SELF REVIEW — işlemi yapan ve inceleyen aynı kişi; bağımsız ikinci kişi onayı yok.</strong></p>"
     if review:
         body += "<h2>Tam taslak incelemesi — OPERATÖR BEYANI</h2><pre>"
         body += h(json.dumps(review, ensure_ascii=False, indent=2)) + "</pre>"
@@ -164,10 +166,14 @@ class LiveExecute:
         checklist = {"PO": po["po_number"], "Talep edilen teslimat": po["delivery"],
             "Teslimat incelemesi": facts["delivery_review"], "Belge incelemesi": facts["checklist"],
             "Durum": "DRAFT — sevkiyat veya hukuki belge yayım izni verilmemiştir"}
-        return {"inputs": inputs, "facts_provenance": {key: facts[key] for key in (*PROVENANCE,
+        result = {"inputs": inputs, "facts_provenance": {key: facts[key] for key in (*PROVENANCE,
                     "retention_until_utc", "document_id", "permission_document_id")},
                 "requirements": requirements, "documents": {"COMMERCIAL_INVOICE_DRAFT": invoice,
                     "PACKING_LIST_DRAFT": packing, "SHIPMENT_DOCUMENT_CHECKLIST_DRAFT": checklist}}
+        # Preserve legacy two-person bundle bytes/hashes and existing registered artifacts.
+        if pilot["review_model"] == SELF_REVIEW:
+            result["review_model"] = SELF_REVIEW
+        return result
 
     def save(self, identities, expected_inputs, values, document, permission, *, expected_revision=0,
              expected_hash=""):
@@ -273,6 +279,8 @@ class LiveExecute:
                 or review["authority_ref"] != pilot["authorization_ref"]):
             raise ValueError("Güncel tam taslak için kayıtlı insan onayı gerekli")
         self.intake.read_document(db, review["document_id"])
+        if pilot["review_model"] == SELF_REVIEW:
+            review["review_model"] = SELF_REVIEW
         return review
 
     def review(self, identity, revision, digest, expected_sequence, values, evidence):
@@ -285,7 +293,7 @@ class LiveExecute:
             if values.get("decision") not in ("APPROVE", "REJECT", "REVOKE"):
                 raise ValueError("Geçerli karar gerekli")
             if values.get("approver_name") != pilot["approver_name"] or values.get("reviewed") != "yes":
-                raise ValueError("Kayıtlı ayrı onaylayanın tam taslak incelemesi gerekli")
+                raise ValueError("Kayıtlı inceleyenin tam taslak incelemesi gerekli")
             confirmed = _time(values.get("confirmed_at_utc"))
             if not _time(row["recorded_at_utc"]) <= confirmed <= _now():
                 raise ValueError("Teyit zamanı bu sürümden sonra ve gelecekte olmayan bir zaman olmalı")
@@ -334,7 +342,8 @@ class LiveExecute:
 
     def view(self, identity=None):
         with self.intake.transaction(write=False) as db:
-            result = {"orders": [dict(row) for row in db.execute("SELECT * FROM live_order ORDER BY rowid DESC")]}
+            pilot = self.intake.pilot(db)
+            result = {"pilot": pilot, "orders": [dict(row) for row in db.execute("SELECT * FROM live_order ORDER BY rowid DESC")]}
             if not identity:
                 return result
             row = self.current(db, identity)

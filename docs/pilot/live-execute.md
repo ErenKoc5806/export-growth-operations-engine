@@ -7,12 +7,17 @@ There is no legal invoice numbering/issuance, ERP write, carrier booking, email,
 provider call or automated outreach. Sell remains manual; Find is source research.
 
 **Actual pilot acceptance is outstanding.** Fictional tests and CI do not supply
-#13 manufacturer consent, qualified tax/classification/privacy decisions, IT's
+#13 manufacturer consent, qualified tax/classification/privacy decisions, the responsible storage reviewer's
 actual disk/backup encryption and retention review (#74), or #68's real Windows
 workstation rehearsal. Do not enter actual documents before those gates are met.
 The [trusted-owner model](trust-model.md) continues: one manufacturer, one local
-OS operator and a distinct named approver whose confirmation is recorded by that
-operator. This is an attestation, not an authenticated approver login.
+OS operator. The primary solo pilot uses **SINGLE_OPERATOR_SELF_REVIEW**: the
+operator and reviewer are the same authorized person, with an explicit separate
+review step. Enrollment, review screens and downloaded drafts disclose **SELF
+REVIEW — no independent second-person approval**. The distinct-person attestation
+model remains available and applies to legacy enrollments. Neither model is an
+authenticated approver login. Storage-review roles may be held by the responsible
+authorized operator; actual computer/backup checks must still be evidenced.
 
 ## Prepare and use
 
@@ -35,8 +40,8 @@ operator. This is an attestation, not an authenticated approver login.
    python -m pilot_engine.live_operator --database C:\Pilot\data\pilot.sqlite3 --retention-ledger C:\Pilot\control\retention.sqlite3
    ```
 
-3. Complete the [authorized intake](authorized-intake.md), including the separate
-   named approver's exact-version evidence for product/classification, price/tax
+3. Complete the [authorized intake](authorized-intake.md), including the registered
+   reviewer's exact-version evidence for product/classification, price/tax
    authority and customer PO. Select **Canlı Execute** and choose those three
    records by their visible labels. Internal IDs are generated, not entered.
 4. Record the manufacturer-provided party, destination, origin, tax, packing and
@@ -52,7 +57,7 @@ operator. This is an attestation, not an authenticated approver login.
    release does not implement discretionary price overrides or a PO amendment
    workflow. The quantity × price PO total and reviewed tax / charges / discount
    produce the displayed draft total using decimal arithmetic.
-6. The named approver reviews the **entire exact bundle/hash**, including the PO
+6. The named reviewer (the same operator in solo mode) reviews the **entire exact bundle/hash**, including the PO
    differences and checklist. Record decision, reason, method, reference, time and
    confirmation file. The recording OS actor and claimed human are kept separate.
    Approval still leaves every document a DRAFT. Corrections append a new version
@@ -117,7 +122,7 @@ upgrade with verified recovery copies. CI runs it on Linux and native Windows.
 
 For #68, repeat the chain with **one authorized real manufacturer PO** on the
 actual Windows workstation with IT present, record release and input/output
-hashes privately, have the named approver confirm, and capture manual vs observed
+hashes privately, have the registered reviewer confirm under the recorded model, and capture manual vs observed
 minutes plus correction/rework counts. Include source invalidation, export-copy
 reconciliation/disposition and a separate-path restore check. Keep #75 open until
 that evidence exists. No actual manufacturer evidence belongs in GitHub fixtures.

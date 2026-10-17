@@ -10,7 +10,8 @@ rehearsal and full workflow activation.
 
 1. Stop other database users and run the [verified maintenance procedure](live-schema.md)
    with new backup/rehearsal paths to install extension **v4**. This upgrades
-   either legacy v29 without a live extension or released v1/v2. Backup/restore
+   either legacy v29 without a live extension or released v1/v2/v3. Bound v3
+   upgrades also supply their existing control ledger and approved copy expiry. Backup/restore
    comparisons include existing live history and schema; post-DDL checks preserve
    all existing rows/schema objects. Legacy `user_version=29` stays intact.
 2. Complete the [retention/control setup](evidence-retention.md), with reviewed
@@ -22,12 +23,15 @@ rehearsal and full workflow activation.
    Full `AppConfig` Windows pilot activation remains disabled. This intake app
    has no mail/provider/ERP/carrier adapter or synthetic demo route.
 3. The first screen requires manufacturer, authority reference, authorizer,
-   named operator, separate named approver/role, IT reviewer, baseline,
+   named operator, named reviewer/role, selected review model, workstation/storage
+   reviewer, baseline,
    backup/retention owner and expiry. Upload manufacturer/data-use approval and
    IT acceptance documents. Explicitly attest people/scope authorization, data
    handling, account/backup arrangements and acceptance of the trusted-owner
-   limit. Missing proofs, unchecked acceptances, synthetic references, identical
-   operator/approver or expired authority block enrollment. One manufacturer is
+   limit. Missing proofs, unchecked acceptances, synthetic references, a review-model mismatch or expired authority block enrollment. In **tek kişi /
+   öz inceleme**, use the same full name for operator and reviewer and explicitly
+   acknowledge the absence of independent second-person review. In the separate
+   reviewer model the two names must differ. One manufacturer is
    supported; its authorization is bound to the recording OS actor.
 4. Inspect the saved authorization/evidence before intake. This records supplied
    evidence; it does not verify a signature or independently authenticate a human.
@@ -67,7 +71,10 @@ requires a fresh source-version reference, evidence and human confirmation.
 Internal IDs are generated/selected by links; no JSON editing or internal ID
 entry is required.
 
-The named approver reviews the full record and source evidence. The operator
+The named reviewer reviews the full record and source evidence. In self-review
+that is the same person, with a separate explicit decision on the exact version.
+The UI labels this **ÖZ İNCELEME**; the separate-person model is an operator-recorded
+attestation. The operator
 records approve/reject/revoke, name, reason, method, confirmation time and uploaded
 evidence/reference. Role/authority come from the roster; the OS actor comes from
 the process. The UI labels this **operator attestation**, not an authenticated
