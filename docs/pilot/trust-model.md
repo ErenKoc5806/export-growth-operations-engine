@@ -1,9 +1,14 @@
-# First-pilot trust boundary — decision, 2026-10-15
+# First-pilot trust boundary — updated decision, 2026-10-17
 
 ## Scope and development limit
 
-The first pilot is one manufacturer, one Windows workstation, one named operator
-and one named human approver. Additional Windows hardening stops at PRs #69/#70.
+The first pilot is one manufacturer, one Windows workstation and one named
+operator who declares authority for the work and may also review their own drafts.
+The 2026-10-17 decision supports **SINGLE_OPERATOR_SELF_REVIEW**: a separate recorded
+review of exact content, visibly labeled self-review. It is not an independent
+second-person approval. **DISTINCT_PERSON_ATTESTATION** remains available when the
+manufacturer uses a separate named reviewer. Existing enrollments keep their
+recorded model; legacy enrollments remain the distinct-person model. Additional Windows hardening stops at PRs #69/#70.
 Do not build a service-owned database, new Windows account provisioning, a SQLite
 VFS or authenticated cross-account transport before #66/#67. Those are deferred
 until a demonstrated pilot requirement or a deployment outside this trust model.
@@ -22,13 +27,20 @@ the launching process SID does not authenticate the human operating that browser
 Two Windows accounts with a writable database are not isolated from one another.
 We do not claim tamper-proof approvals or malicious-insider protection.
 
-The product owner accepts this limit for the narrow first-pilot design. The
-manufacturer/IT has **not** yet accepted it; their actual acceptance belongs to
-#13, and target-machine evidence belongs to #68. Do not infer either from CI.
+The product owner accepts this limit for the narrow first-pilot design and has
+declared that the first operator is also the responsible authorized reviewer.
+Record actual scope/data-use and storage-review evidence under #13; the declaration
+does not measure the computer's encryption, private permissions or backup state.
+Target-machine evidence belongs to #68. CI does not provide that evidence.
 
 ## Recorded human review
 
-The operator and approver must be named in the manufacturer-authorized roster.
+The operator and reviewer must be named in the manufacturer-authorized roster.
+For self-review they must be the same named person, and enrollment must explicitly
+acknowledge that no independent second-person control exists. For distinct-person
+review their names must differ. Missing/unknown model values cannot silently enable
+self-review; omitted model on an older/API enrollment means distinct-person review.
+The model is immutable within the enrolled pilot, not a per-request bypass flag.
 One workstation is sufficient; separate Windows accounts are not a prerequisite
 for this procedural control. IT decides the permitted account arrangement.
 
@@ -58,7 +70,7 @@ approval counts as manufacturer authorization or approval of a real recipient.
   synthetic evidence must never authorize a live record or action.
 - #68: run the actual release on the intended Windows machine/filesystem; record
   release SHA, Windows/filesystem details, data/backup permissions, restore result,
-  operator/approver walkthrough, exceptions and IT review. CI is supporting evidence
+  operator/reviewer walkthrough, exceptions and workstation/storage review. CI is supporting evidence
   only. Failures remain activation blockers; do not reopen an unlimited hardening
   workstream merely to obtain a stronger isolation claim than this pilot needs.
 - #38: controlled mailbox/provider evidence and approved delivery controls before

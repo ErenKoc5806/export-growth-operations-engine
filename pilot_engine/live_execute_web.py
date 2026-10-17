@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from pilot_engine.live_execute import FACTS, INPUT_KINDS, LiveExecute, render_bundle
-from pilot_engine.live_intake import KINDS
+from pilot_engine.live_intake import KINDS, review_label
 from pilot_engine.live_operator import _hidden, _proof, _status, _timefield
 from pilot_engine.operator_web import _field, _h, _layout
 
@@ -101,13 +101,13 @@ class ExecuteWorkspace:
             artifact = render_bundle(data["bundle"], row["bundle_sha256"]).decode()
             body += artifact.split("<body>", 1)[1].removesuffix("</body></html>")
             fields = fixed + _hidden("sequence", data["sequence"])
-            fields += _field("approver_name", "Kayıtlı ayrı onaylayan — operatör beyanı")
+            fields += _field("approver_name", "Kayıtlı inceleyen — seçilen pilot modeline göre")
             fields += "<label>Karar<select name='decision'><option>APPROVE</option><option>REJECT</option><option>REVOKE</option></select></label>"
             fields += _field("reviewed", "Tam içeriğin incelendiği teyidi: yes")
             for key, label in (("reason", "Karar ve PO farkları inceleme gerekçesi"), ("method", "Teyit yöntemi"), ("evidence_ref", "Tam sürüm teyit kanıtı referansı")):
                 fields += _field(key, label)
             fields += _timefield("confirmed_at_utc", "Teyit zamanı") + _proof("review_document", "Bu tam taslağın onay kanıtı")
-            body += "<h3>Ayrı insan incelemesi — OPERATÖR BEYANI</h3>" + self.app.form("/execute/review", fields, "Tam sürüm kararı kaydet")
+            body += "<h3>" + _h(review_label(data["pilot"])) + " — OPERATÖR BEYANI</h3>" + self.app.form("/execute/review", fields, "Tam sürüm kararı kaydet")
             fields = fixed
             for key, label in (("baseline_minutes", "#13 manuel süre karşılaştırması (dakika)"),
                     ("elapsed_minutes", "Bu PO için toplam gerçek operatör süresi (dakika)"),

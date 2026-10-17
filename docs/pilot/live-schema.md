@@ -33,7 +33,8 @@ Foreign keys never point from these tables into legacy tables. Live IDs use
 `LIVE-`; synthetic source references are rejected. UPDATE and DELETE guards cover
 every live table. Confirmation identity is explicitly `OPERATOR_ATTESTATION`,
 not proof of an authenticated approver. #67 must validate source permissions,
-payloads, source/intake kind agreement, distinct named people and confirmation
+payloads, source/intake kind agreement, named people under the recorded review
+model and confirmation
 evidence before exposing writes. This schema alone authorizes no live workflow,
 email, ERP or carrier action. The original Find/Sell/Execute restrictions remain
 listed in [the boundary inventory](live-mode-design.md).
@@ -120,3 +121,14 @@ restore and DDL failures, retained artifacts and retry. POSIX additionally check
 committed WAL data. The same suite runs on native Windows with private SID-owned
 directories (the POSIX WAL case is skipped there). No real manufacturer data or
 target-workstation acceptance is claimed.
+
+## Recorded review model — 2026-10-17
+
+The authorization's immutable `scope_json` records `review_model`. New solo
+enrollments use `SINGLE_OPERATOR_SELF_REVIEW` plus `self_review_accepted=true` and
+the same operator/reviewer name. `DISTINCT_PERSON_ATTESTATION` requires different
+names; pre-field enrollments retain that policy. No table rebuild or schema
+version change is needed. Self-review bundles carry the model in their content
+hash and printed provenance. Legacy two-person bundles and existing registered
+export bytes remain unchanged. A client cannot switch an enrolled pilot's model
+through an intake/review/export form.
