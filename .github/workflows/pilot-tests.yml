@@ -53,3 +53,8 @@ jobs:
           python -W error::ResourceWarning -m unittest discover -s tests -p test_live_retention.py -v 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/retention-tests.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Select-String -Path "$env:RUNNER_TEMP/retention-tests.log" -Pattern 'ResourceWarning:') { exit 1 }
+      - name: Native Windows live Execute order review export and retirement
+        run: |
+          python -W error::ResourceWarning -m unittest discover -s tests -p test_live_execute.py -v 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/execute-tests.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Select-String -Path "$env:RUNNER_TEMP/execute-tests.log" -Pattern 'ResourceWarning:') { exit 1 }

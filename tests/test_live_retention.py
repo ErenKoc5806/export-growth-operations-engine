@@ -81,7 +81,7 @@ class LiveRetentionTests(unittest.TestCase):
                 self.assertEqual(db.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
             self.assertGreater(db.execute("SELECT count(*) FROM live_document_purge").fetchone()[0], 0)
             migration._check(db)
-            self.assertEqual(migration._live_version(db), 3)
+            self.assertEqual(migration._live_version(db), 4)
         for marker in (intake_tests.DOCUMENT, b"Fixture Approver", b"FICTIONAL manufacturer approval"):
             self.assertNotIn(marker, self.path.read_bytes())
         self.assertEqual(self.snapshot(self.path), self.before)
@@ -126,7 +126,7 @@ class LiveRetentionTests(unittest.TestCase):
         with closing(migration._connect(self.path)) as db:
             self.assertEqual(db.execute("SELECT content FROM live_document WHERE id=?",
                                        (self.document,)).fetchone()[0], intake_tests.DOCUMENT)
-            self.assertEqual(migration._live_version(db), 3)
+            self.assertEqual(migration._live_version(db), 4)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 db.execute("UPDATE live_document SET content=?", (b"unauthorized mutation",))
         with self.assertRaisesRegex(ValueError, "pending"):
@@ -278,11 +278,12 @@ class LiveRetentionTests(unittest.TestCase):
         with closing(migration._connect(self.path)) as db, db:
             guard = db.execute("SELECT sql FROM sqlite_master WHERE name='live_schema_migration_no_delete'").fetchone()[0]
             db.execute("DROP TRIGGER live_schema_migration_no_delete")
-            receipt = db.execute("SELECT * FROM live_schema_migration WHERE version=3").fetchone()
-            db.execute("DELETE FROM live_schema_migration WHERE version=3")
+            receipt = db.execute("SELECT * FROM live_schema_migration WHERE version=4").fetchone()
+            db.execute("DELETE FROM live_schema_migration WHERE version=4")
             db.execute("INSERT INTO live_schema_migration VALUES (2,?,?,?,?)", receipt[1:])
             db.execute(guard)
-            for table in migration.RETENTION_TABLES:
+            for table in ("live_order_export", "live_order_measurement", "live_order_review",
+                          "live_order_input", "live_order_revision", "live_order", *migration.RETENTION_TABLES):
                 db.execute("DROP TABLE " + table)
             self.assertEqual(migration._live_version(db), 2)
             before = migration._snapshot(db, include_live=True)

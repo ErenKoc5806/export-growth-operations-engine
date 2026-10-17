@@ -67,7 +67,7 @@ class LiveMigrationTests(unittest.TestCase):
     def test_whole_legacy_database_backup_restore_and_idempotent_restart(self):
         result = self.run_migration()
         self.assertEqual((result.status, result.legacy_version, result.live_version),
-                         ("MIGRATED", 29, 3))
+                         ("MIGRATED", 29, 4))
         for path in (self.path, self.backup, self.rehearsal):
             self.assertEqual(self.snapshot(path), self.before)
             migration._private(path)
@@ -139,13 +139,13 @@ class LiveMigrationTests(unittest.TestCase):
                 self.assertEqual(migration._snapshot(db, include_live=True), full_before)
         self.backup = self.recovery / "upgrade-v2.sqlite3"
         self.rehearsal = self.restore / "upgrade-v2.sqlite3"
-        self.assertEqual(self.run_migration().live_version, 3)
+        self.assertEqual(self.run_migration().live_version, 4)
         with closing(migration._connect(self.path)) as db:
-            self.assertEqual(migration._live_version(db), 3)
+            self.assertEqual(migration._live_version(db), 4)
             self.assertEqual(db.execute("SELECT manufacturer_name FROM live_pilot").fetchone()[0],
                              "FICTIONAL v1 pilot")
             self.assertEqual(db.execute("SELECT version FROM live_schema_migration ORDER BY version").fetchall(),
-                             [(1,), (3,)])
+                             [(1,), (4,)])
         self.assertEqual(self.snapshot(self.path), self.before)
 
     def test_backup_and_restore_failure_never_apply_live_ddl(self):

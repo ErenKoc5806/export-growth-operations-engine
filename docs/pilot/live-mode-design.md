@@ -1,6 +1,7 @@
 # Controlled live-mode design (#42)
 
-Status: isolated source intake and retention maintenance are implemented; full
+Status: isolated source intake, retention maintenance and local live Execute
+drafts are implemented; full
 live workflow activation and real external actions remain disabled. No real
 manufacturer/IT acceptance is supplied by the implementation or CI.
 
@@ -14,7 +15,8 @@ now has a separate gated workspace; real-sample acceptance still needs #13.
 
 The first useful live path is **Execute**: manufacturer PO → local order → reviewed
 invoice, packing-list and checklist drafts, with measured time/corrections. The
-live consumer is still missing (#75). [#74 retention maintenance](evidence-retention.md)
+[live consumer is implemented](live-execute.md) (#75); its real-case value proof
+remains outstanding. [#74 retention maintenance](evidence-retention.md)
 supports document purge/pilot retirement and copy tracking; actual encryption and
 qualified retention/hold review remain #13/#68 gates before personal data. Sell
 outreach stays manual; Find is provenance-backed buyer-source research notes.
@@ -34,7 +36,7 @@ prerequisites. Do not infer approval from an actor label.
 The app remains loopback-only during the first controlled pilot. Remote access,
 untrusted users or another manufacturer require a separate authenticated service
 design. The local account arrangement is subject to manufacturer/IT approval.
-No installer or real-data path exists yet.
+No installer or accepted actual-workstation activation is supplied yet.
 
 ## Synthetic-only inventory
 
@@ -55,7 +57,7 @@ flag may bypass them.
 1. Obtain #13's verified product, classification, pricing authority, people,
    contact-source permission, retention/backup owner and baseline. Record the
    approvals in an access-controlled pilot record, separate from example fixtures.
-2. Install the additive [live extension v3](live-schema.md) with explicit origin,
+2. Install the additive [live extension v4](live-schema.md) with explicit origin,
    unique IDs, foreign-key boundaries and append-only records. Keep legacy
    `user_version=29` and its synthetic CHECK constraints intact. No legacy table
    rebuild is needed. Rehearse on a complete legacy database copy and verify
@@ -69,7 +71,7 @@ flag may bypass them.
    Negative checks must prove that synthetic IDs/evidence cannot authorize live
    decisions, missing roles and source permissions block writes, and the mock
    mailbox/ERP/carrier cannot become a real side effect by configuration alone.
-5. Implement #75's live Execute consumer, then rehearse its local drafts on the
+5. Rehearse #75's implemented [local live Execute drafts](live-execute.md) on the
    actual workstation under #68 with named manufacturer reviewers and #13 evidence.
    #38/#16 and legal/provider acceptance remain required before a later automated
    send; they do not gate this local Execute-only draft sample. ERP/carrier/issuance
@@ -85,11 +87,11 @@ procedure on a separate path before any live data is entered.
 
 - Actual target-Windows/filesystem/backup trial and manufacturer/IT review (#68/#13).
 - Target-workstation execution of the implemented migration/restore procedure (#68).
-- Live Execute consumer and local reviewed drafts (#75); controlled mail/provider
-  boundary (#38) is separate from this first local sample.
+- Authorized real PO → reviewed local drafts, with measured minutes/corrections
+  (#75/#13/#68); controlled mail/provider boundary (#38) remains separate.
 - Real manufacturer acceptance of the implemented local source/provenance and
   recorded human confirmation workspace (#67/#13); this does not enable live
-  Find/Sell/Execute adapters or provider actions.
+  external Find/Sell/provider adapters or document issuance.
 - Manufacturer authorization, source terms, approvers and measurement baseline
   from #13. The current code does not satisfy these gates.
 

@@ -28,8 +28,10 @@ BASE_TABLES = frozenset({"live_schema_migration", "live_pilot", "live_source",
 EVIDENCE_TABLES = frozenset({"live_document", "live_authorization", "live_source_permission",
                             "live_confirmation_evidence", "live_intake_stop"})
 RETENTION_TABLES = frozenset({"live_retention_binding", "live_document_purge"})
-LIVE_TABLES = BASE_TABLES | EVIDENCE_TABLES | RETENTION_TABLES
-LIVE_VERSION = 3
+EXECUTE_TABLES = frozenset({"live_order", "live_order_revision", "live_order_input",
+                            "live_order_review", "live_order_measurement", "live_order_export"})
+LIVE_TABLES = BASE_TABLES | EVIDENCE_TABLES | RETENTION_TABLES | EXECUTE_TABLES
+LIVE_VERSION = 4
 
 
 def _quote(name: str) -> str:
@@ -148,10 +150,11 @@ def _live_version(db: sqlite3.Connection) -> int:
     if "live_schema_migration" not in live_tables:
         raise ValueError("Incomplete or unknown live namespace")
     version = db.execute("SELECT max(version) FROM live_schema_migration").fetchone()[0]
-    if version not in (1, 2, 3):
+    if version not in (1, 2, 3, 4):
         raise ValueError("Unsupported live schema version")
     version_tables = (BASE_TABLES if version == 1 else BASE_TABLES | EVIDENCE_TABLES
-                      if version == 2 else LIVE_TABLES)
+                      if version == 2 else BASE_TABLES | EVIDENCE_TABLES | RETENTION_TABLES
+                      if version == 3 else LIVE_TABLES)
     if live_tables != version_tables:
         raise ValueError("Incomplete or unknown live namespace")
     expected = {name + suffix for name in version_tables for suffix in ("_no_update", "_no_delete")}
@@ -165,14 +168,18 @@ def _apply(db: sqlite3.Connection, current: int = 0) -> None:
     scripts = ([SCHEMA] if current == 0 else [])
     if current < 2:
         scripts.append(SCHEMA.with_name("002_intake_evidence.sql"))
-    scripts.append(SCHEMA.with_name("003_retention.sql"))
+    if current < 3:
+        scripts.append(SCHEMA.with_name("003_retention.sql"))
+    scripts.append(SCHEMA.with_name("004_execute.sql"))
     for script in scripts:
         for statement in _migration_statements(script.read_text(encoding="utf-8")):
             db.execute(statement)
     new_tables = (BASE_TABLES if current == 0 else frozenset())
     if current < 2:
         new_tables |= EVIDENCE_TABLES
-    new_tables |= RETENTION_TABLES
+    if current < 3:
+        new_tables |= RETENTION_TABLES
+    new_tables |= EXECUTE_TABLES
     for table in sorted(new_tables):
         for action in ("UPDATE", "DELETE"):
             db.execute(f"CREATE TRIGGER {_quote(table + '_no_' + action.lower())} "
@@ -189,7 +196,7 @@ class MigrationResult:
     legacy_fingerprint: str | None = None
 
 
-def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> MigrationResult:
+def _migrate(database: str | Path, backup: str | Path, rehearsal: str | Path, guard=None) -> MigrationResult:
     """Create new recovery files, rehearse restore, then atomically add live tables.
 
     Existing recovery artifacts are never overwritten. After failure, retain them
@@ -212,6 +219,8 @@ def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> 
         db.execute("BEGIN IMMEDIATE")
         try:
             _check(db)
+            if guard:
+                guard(db)
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version != 29:
                 raise ValueError("Live extension requires the reviewed legacy schema v29")
@@ -262,6 +271,8 @@ def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> 
                          migration_version=current) != full_before:
                 raise ValueError("Live extension changed existing records or schema")
             _live_version(db)
+            if guard:
+                guard(db)
             db.commit()
             return MigrationResult("MIGRATED", version, LIVE_VERSION, checksum, before["fingerprint"])
         except BaseException:
@@ -269,13 +280,45 @@ def migrate(database: str | Path, backup: str | Path, rehearsal: str | Path) -> 
             raise
 
 
+def migrate(database, backup, rehearsal, *, retention_ledger=None, copies_until=None):
+    """Bound upgrades retain their current control lease and register new copies first."""
+    database = Path(database).absolute()
+    _private(database.parent, directory=True)
+    _private(database)
+    with closing(_connect(database, readonly=True)) as db:
+        version = _live_version(db)
+        bound = version >= 3 and db.execute("SELECT 1 FROM live_retention_binding").fetchone()
+    if not bound or version == LIVE_VERSION:
+        return _migrate(database, backup, rehearsal)
+    if retention_ledger is None or copies_until is None:
+        raise ValueError("Bound upgrade requires the current retention ledger and copies-until")
+    from pilot_engine.live_retention import Retention
+
+    retention = Retention(database, retention_ledger)
+    with retention.ledger() as ledger, closing(_connect(database, readonly=True)) as db:
+        retention.guard(db, ledger)
+    ids = [retention.register_copy(backup, copies_until, pending=True),
+           retention.register_copy(rehearsal, copies_until, kind="REHEARSAL", pending=True)]
+    with retention.ledger() as ledger:
+        result = _migrate(database, backup, rehearsal, lambda db: retention.guard(db, ledger))
+    with retention.ledger(exclusive=True) as ledger:
+        retention._ready(ledger)
+        for identity, path in zip(ids, (backup, rehearsal)):
+            ledger.execute("UPDATE recovery_copy SET sha256=?,state='ACTIVE' WHERE id=?",
+                           (_sha256(Path(path).absolute()), identity))
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Offline live-schema migration with restore rehearsal")
     parser.add_argument("--database", required=True)
     parser.add_argument("--backup", required=True)
     parser.add_argument("--rehearsal", required=True)
+    parser.add_argument("--retention-ledger")
+    parser.add_argument("--copies-until")
     args = parser.parse_args()
-    print(json.dumps(asdict(migrate(args.database, args.backup, args.rehearsal)), sort_keys=True))
+    print(json.dumps(asdict(migrate(args.database, args.backup, args.rehearsal,
+                                   retention_ledger=args.retention_ledger, copies_until=args.copies_until)), sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -99,7 +99,7 @@ class LiveIntake:
             raise ValueError("Ayrı ve güncel saklama/silme günlüğü gerekli")
         self.retention = Retention(self.path, retention_ledger, self.access)
         with self.transaction(write=False) as db:
-            if _live_version(db) != 3:
+            if _live_version(db) not in (3, 4):
                 raise ValueError("Önce yedekli canlı şema v3 bakımını çalıştırın")
 
     def require(self, permission):

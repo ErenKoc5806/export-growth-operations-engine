@@ -859,7 +859,8 @@ def make_handler(app: OperatorWeb):
             self.send_header("Content-Type", "application/octet-stream" if attachment else
                              "text/html; charset=utf-8")
             if attachment:
-                self.send_header("Content-Disposition", 'attachment; filename="evidence.bin"')
+                filename = attachment if isinstance(attachment, str) else "evidence.bin"
+                self.send_header("Content-Disposition", 'attachment; filename="' + filename + '"')
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")

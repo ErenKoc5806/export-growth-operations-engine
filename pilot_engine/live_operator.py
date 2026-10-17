@@ -158,6 +158,10 @@ class LiveOperator:
         return body
 
     def page(self, path, query):
+        if path == "/execute" or path.startswith("/execute/"):
+            from pilot_engine.live_execute_web import ExecuteWorkspace
+
+            return ExecuteWorkspace(self).page(path, query)
         def one(name):
             values = query.get(name, [])
             if len(values) != 1:
@@ -175,6 +179,7 @@ class LiveOperator:
             body += self.enrollment()
         elif path == "/":
             pilot = data["pilot"]
+            body += "<p><a href='/execute'>Canlı Execute — yerel sipariş ve taslaklar</a></p>"
             body += "<h2>" + _h(pilot["manufacturer_name"]) + " — yetkili kaynaklar</h2>"
             body += "<p>Operatör: " + _h(pilot["operator_name"]) + " · Onaylayan: " + _h(pilot["approver_name"]) + "</p>"
             body += "<p>Yetki: " + _h(pilot["authorization_ref"]) + " · Geçerlilik: " + _h(pilot["expires_at_utc"]) + "</p>"
@@ -203,6 +208,15 @@ class LiveOperator:
     def execute(self, path, values, files):
         if values.get("confirm") != "yes":
             raise ValueError("İşlem için açık teyit gerekli")
+        if path.startswith("/execute/"):
+            from pilot_engine.live_execute_web import ExecuteWorkspace
+
+            converted = dict(values)
+            for key in ("retention_until_utc", "confirmed_at_utc", "expires_at_utc"):
+                if key in converted:
+                    parsed = datetime.fromisoformat(converted[key].replace("Z", "+00:00"))
+                    converted[key] = parsed.astimezone(timezone.utc).isoformat() if parsed.tzinfo else _utc(converted[key])
+            return ExecuteWorkspace(self).execute(path, converted, files)
         allowed = {"/enroll": {"manufacturer_document", "it_document"},
                    "/save": {"source_document", "permission_document"},
                    "/confirm": {"confirmation_document"}, "/stop-source": set(), "/stop-pilot": set()}

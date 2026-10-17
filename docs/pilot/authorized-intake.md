@@ -9,7 +9,7 @@ rehearsal and full workflow activation.
 ## Start and record authorization
 
 1. Stop other database users and run the [verified maintenance procedure](live-schema.md)
-   with new backup/rehearsal paths to install extension **v3**. This upgrades
+   with new backup/rehearsal paths to install extension **v4**. This upgrades
    either legacy v29 without a live extension or released v1/v2. Backup/restore
    comparisons include existing live history and schema; post-DDL checks preserve
    all existing rows/schema objects. Legacy `user_version=29` stays intact.
@@ -46,7 +46,9 @@ rehearsal and full workflow activation.
 Scope is HS6 732690 / Germany / EUR. A recorded HS review is not automated tariff
 classification. A PO intake is not quote matching, an order or a tax calculation.
 Approval here never authorizes a recipient, message, email, ERP write, carrier
-booking or document release. Operational live Find/Sell/Execute adapters are not
+booking or document release. The separate [local live Execute drafts](live-execute.md) now consume approved
+product, price and PO records through their own guarded service. External
+Find/Sell/provider adapters are not
 implemented by this source capture.
 
 Every source requires a unique source-version reference, permission/terms
