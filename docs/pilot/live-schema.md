@@ -2,7 +2,7 @@
 
 Implemented maintenance tooling; **full live operation remains disabled**.
 The separate [authorized intake workspace](authorized-intake.md) requires #13
-evidence, extension v3 and an external current [retention ledger](evidence-retention.md).
+evidence, extension v4 and an external current [retention ledger](evidence-retention.md).
 Manufacturer acceptance and actual workstation
 activation (#68) remain outstanding. Use the [trusted-owner pilot model](trust-model.md).
 
@@ -12,8 +12,10 @@ The existing 29 migrations and `PRAGMA user_version = 29` remain unchanged.
 `live_migrations/001_namespace.sql` is an independently versioned, additive
 extension. Its first release was v1; `002_intake_evidence.sql` adds v2 evidence,
 authorization, source permission and stop records. `003_retention.sql` adds
-control binding and minimal purge receipts. Its latest receipt is
-`live_schema_migration.version = 3`. The normal
+control binding and minimal purge receipts. `004_execute.sql` adds local live
+orders, input bindings, reviewed draft revisions, measurements and export bindings
+(see [live Execute](live-execute.md)). Its latest receipt is
+`live_schema_migration.version = 4`. The normal
 `PilotStore` startup does not install it. Keeping the old CHECK constraints avoids
 rebuilding synthetic tables or allowing existing synthetic services to consume
 live rows. Never relabel or copy a synthetic record into the live namespace.
@@ -53,6 +55,13 @@ listed in [the boundary inventory](live-mode-design.md).
    python -m pilot_engine.live_migration --database C:\Pilot\data\pilot.sqlite3 --backup C:\Pilot\backup\before-live.sqlite3 --rehearsal C:\Pilot\rehearsal\restored.sqlite3
    ```
 
+   When upgrading an already-bound v3 database, also pass `--retention-ledger`
+   with the existing current control path and `--copies-until` with an approved
+   expiry. The tool registers the new backup/rehearsal before creating either,
+   holds the current control lease, and checks its binding/deny policy through
+   migration. Failed copies stay PENDING for reviewed reconciliation. A missing
+   ledger is a stop condition; never initialize a replacement to bypass history.
+
 3. The tool holds `BEGIN IMMEDIATE` through the complete operation. Another
    connection uses SQLite's backup API, including committed WAL data; copying
    just the main SQLite file is not a valid backup. Both source and backup pass
@@ -60,7 +69,7 @@ listed in [the boundary inventory](live-mode-design.md).
    legacy table's rows, schema objects, counts, application ID and version.
 4. Before any live DDL, the tool restores that backup into a separate new SQLite
    file and verifies the same complete legacy fingerprint/counts and integrity.
-   Existing live history is included when upgrading v1/v2 to v3. It verifies the
+   Existing live history is included when upgrading v1/v2/v3 to v4. It verifies the
    backup SHA-256 again, then writes a private
    `<backup>.manifest.json` receipt. The receipt contains counts/hashes, not row
    payloads. Keep it with the backup under the approved retention policy. SQLite

@@ -11,7 +11,7 @@ legal retention rules. No disk encryption is enabled or certified by this tool.
 | Operation | Removes from the maintained main DB | Retains |
 | --- | --- | --- |
 | DOCUMENT | Selected BLOB content, including all shared uses of that document | Inert `PURGED` bytes; original hash, ID, actor/time; all source/payload/approval text and minimal purge receipts |
-| PILOT | All operational live document, authorization, source, intake, confirmation and stop rows for the sole pilot | Legacy synthetic rows/schema; live schema versions, control binding and minimal purge receipts; external control/copy metadata |
+| PILOT | All operational live document, authorization, source, intake, confirmation, stop, order, draft/input, review, measurement and export-binding rows for the sole pilot | Legacy synthetic rows/schema; live schema versions, control binding and minimal purge receipts; external control/copy metadata |
 | Registered copy disposal | The selected registered file through normal unlink | Disposition receipt, path/hash/owner/expiry in the external control ledger; other copies remain untouched |
 
 **A document purge is not erasure of names in the surrounding records.** The plan
@@ -21,8 +21,10 @@ There is no selective personal-field redaction in this release. Retained IDs,
 hashes, OS actors, backup-owner names and paths can themselves be identifying;
 the qualified policy review must cover their necessity, access and retention.
 No anonymity claim is made. Legacy tables are retained and must remain synthetic.
-When #75 adds order/draft tables, retirement must explicitly cover them and exported
-draft copies before those features can accept personal data.
+[Live Execute v4](live-execute.md) extends retirement to all six order/draft tables.
+Document plans include affected orders and export-copy IDs. Derived draft text
+remains after DOCUMENT purge; PILOT retirement removes it. Registered external
+exports remain subject to separate reviewed disposition.
 
 SQLite `secure_delete`, WAL checkpoint/truncation, rollback-journal handling and
 VACUUM are used to remove selected bytes from the current logical DB and compact
@@ -35,7 +37,10 @@ all copies. A tombstone by itself is not deletion of original bytes.
 
 1. Stop the operator app and all database users. Upgrade through
    `python -m pilot_engine.live_migration` with new private backup/rehearsal paths
-   to live extension **v3**. V1/v2 upgrade preserves all existing rows and schema.
+   to live extension **v4**. V1/v2/v3 upgrade preserves all existing rows and schema.
+   For an already-bound v3 upgrade, add the existing `--retention-ledger` and
+   approved `--copies-until`; new migration copies are registered before creation.
+   Do not initialize another control ledger after upgrading a bound database.
 2. Provision a private control directory outside the database directory and
    outside recovery/export directories, under the same accepted OS account.
    Maintain a current external retention ledger there. Ordinary DB backups must

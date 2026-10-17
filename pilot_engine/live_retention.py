@@ -22,7 +22,8 @@ from pilot_engine.live_migration import (_check, _connect, _copy_database, _live
 
 
 TOMBSTONE = b"PURGED"
-RETIRED_TABLES = ("live_intake_stop", "live_confirmation_evidence", "live_confirmation",
+RETIRED_TABLES = ("live_order_export", "live_order_measurement", "live_order_review",
+                  "live_order_input", "live_order_revision", "live_order", "live_intake_stop", "live_confirmation_evidence", "live_confirmation",
                   "live_intake_revision", "live_intake", "live_source_permission", "live_source",
                   "live_authorization", "live_pilot", "live_document")
 LEDGER_SCHEMA = """
@@ -141,7 +142,7 @@ class Retention:
         _reference(storage_ref)
         private_database(self.database)
         with closing(_connect(self.database)) as db:
-            if _live_version(db) != 3:
+            if _live_version(db) not in (3, 4):
                 raise ValueError("Install live schema v3 before binding retention control")
             binding = db.execute("SELECT * FROM live_retention_binding").fetchone()
             if binding:
@@ -170,7 +171,7 @@ class Retention:
         private_database(self.database)
         with self.ledger(exclusive=True) as ledger, closing(_connect(self.database)) as db:
             self._ready(ledger)
-            if _live_version(db) != 3:
+            if _live_version(db) not in (3, 4):
                 raise ValueError("Install live schema v3")
             self._denied(db, ledger)
             if (db.execute("SELECT 1 FROM live_document").fetchone() and
@@ -236,7 +237,7 @@ class Retention:
             self._ready(ledger)
             _check(db)
             self._denied(db, ledger)
-            if _live_version(db) == 3:
+            if _live_version(db) in (3, 4):
                 self._binding(db, ledger)
             return {"status": "NO_RETIRED_CONTENT_FOUND", "sha256": _sha256(restored),
                     "activation_authorized": False}
@@ -255,8 +256,9 @@ class Retention:
         else:
             raise ValueError("Choose DOCUMENT purge or PILOT retirement")
         refs, affected_ids = {}, {}
+        existing_tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for table in RETIRED_TABLES:
-            if kind == "PILOT":
+            if kind == "PILOT" and table in existing_tables:
                 refs[table] = db.execute("SELECT count(*) FROM " + _quote(table)).fetchone()[0]
         if kind == "DOCUMENT":
             for table, columns in (("live_authorization", ("manufacturer_document_id", "it_document_id")),
@@ -270,6 +272,26 @@ class Retention:
                 affected_ids[table] = [row[0] for row in db.execute(
                     "SELECT " + identity + " FROM " + table + " WHERE " + clause + " ORDER BY " + identity,
                     (target,) * len(columns))]
+        if "live_order" in existing_tables:
+            if kind == "PILOT":
+                orders = [row[0] for row in db.execute("SELECT id FROM live_order ORDER BY id")]
+            else:
+                orders = [row[0] for row in db.execute("""
+                    SELECT DISTINCT o.id FROM live_order o
+                    JOIN live_order_revision r ON r.order_id=o.id
+                    WHERE r.document_id=? OR r.permission_document_id=?
+                    OR EXISTS (SELECT 1 FROM live_order_review v WHERE v.order_id=o.id AND v.document_id=?)
+                    OR EXISTS (SELECT 1 FROM live_order_input i
+                        JOIN live_source_permission p ON p.source_id=i.source_id
+                        JOIN live_confirmation_evidence e ON e.confirmation_sequence=i.confirmation_sequence
+                        WHERE i.order_id=o.id AND (p.document_id=? OR p.permission_document_id=? OR e.document_id=?))
+                    OR EXISTS (SELECT 1 FROM live_authorization a WHERE a.pilot_id=o.pilot_id
+                        AND (a.manufacturer_document_id=? OR a.it_document_id=?)) ORDER BY o.id
+                    """, (target,) * 8)]
+            affected_ids["live_order"] = orders
+            refs["live_order"] = len(orders)
+            affected_ids["export_copy_ids"] = [row[0] for order in orders for row in db.execute(
+                "SELECT copy_id FROM live_order_export WHERE order_id=? ORDER BY copy_id", (order,))]
         # A full logical fingerprint invalidates a plan if any record/decision changes.
         return {"kind": kind, "target": target, "documents": documents,
                 "affected_rows": refs, "affected_ids": affected_ids,
@@ -336,6 +358,8 @@ class Retention:
             db.execute(guards["live_document_no_update"])
         else:
             for table in RETIRED_TABLES:
+                if table + "_no_delete" not in guards:
+                    continue
                 trigger = table + "_no_delete"
                 db.execute("DROP TRIGGER " + _quote(trigger))
                 db.execute("DELETE FROM " + _quote(table))
@@ -354,7 +378,7 @@ class Retention:
             db.execute("PRAGMA secure_delete=ON")
             db.execute("VACUUM")
             _check(db)
-            if _live_version(db) != 3:
+            if _live_version(db) not in (3, 4):
                 raise ValueError("Retention schema/guards missing after compaction")
         with self.database.open("r+b") as stream:
             os.fsync(stream.fileno())
@@ -377,7 +401,7 @@ class Retention:
         with closing(_connect(self.database)) as db:
             with self.ledger() as ledger:
                 self._binding(db, ledger)
-            if _live_version(db) != 3:
+            if _live_version(db) not in (3, 4):
                 raise ValueError("Wrong live schema for maintenance")
             db.execute("PRAGMA secure_delete=ON")
             db.execute("BEGIN IMMEDIATE")
